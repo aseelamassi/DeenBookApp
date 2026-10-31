@@ -11,6 +11,6 @@ workflows:
       - name: Install Flutter packages
         script: flutter pub get
       - name: Build Android APK for testing
-        script: flutter build apk --debug --dart-define=API_BASE_URL=https://api-deenbook.runasp.net
+        script: flutter build apk --debug --dart-define=API_BASE_URL=http://api-deenbook.runasp.net
     artifacts:
       - build/app/outputs/flutter-apk/*.apk

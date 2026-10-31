@@ -1,0 +1,16 @@
+workflows:
+  android-debug-apk:
+    name: DeenBook Android APK (test)
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      flutter: stable
+    scripts:
+      - name: Configure Flutter SDK path
+        script: echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
+      - name: Install Flutter packages
+        script: flutter pub get
+      - name: Build Android APK for testing
+        script: flutter build apk --debug --dart-define=API_BASE_URL=https://api-deenbook.runasp.net
+    artifacts:
+      - build/app/outputs/flutter-apk/*.apk

@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import 'storage.dart';
+import 'offline.dart';
 
 typedef Json = Map<String, dynamic>;
 const defaultApiBaseUrl = 'https://api-deenbook.runasp.net';
@@ -122,13 +123,92 @@ class Api {
           );
   final Storage storage;
   final Dio dio;
+  late final OfflineVault offlineVault = OfflineVault(storage);
+  String? _shopId;
+  bool _offlineMode = false;
+  bool get isOffline => _offlineMode;
+  VoidCallback? onConnectionChanged;
+  String get savedShopId => _shopId ?? '';
+  // A locally remembered session can read saved snapshots and queue financial
+  // operations, but it cannot perform server-verified administrative writes.
+  bool get offlineSession => _offlineMode && _access == null && _shopId != null;
+
+  void _setOffline(bool value) {
+    if (_offlineMode == value) return;
+    _offlineMode = value;
+    onConnectionChanged?.call();
+  }
+
+  Future<void> rememberStatus(Json data) async {
+    final id = data['id'];
+    if (id is! String || id.isEmpty) return;
+    _shopId = id;
+    if (!_offlineMode) {
+      await storage.write('offline.identity', jsonEncode({
+        'shopId': id,
+        'verifiedAt': DateTime.now().toUtc().toIso8601String(),
+      }));
+      await offlineVault.saveSnapshot(id, '/api/subscription', null, data);
+    }
+  }
+
+  Future<bool> _restoreOfflineIdentity() async {
+    try {
+      final raw = await storage.read('offline.identity');
+      if (raw == null) return false;
+      final identity = jsonDecode(raw) as Map;
+      final id = identity['shopId'];
+      final verified = DateTime.tryParse('${identity['verifiedAt']}');
+      if (id is! String || id.isEmpty || verified == null ||
+          DateTime.now().toUtc().difference(verified.toUtc()) >
+              const Duration(days: 7) ||
+          DateTime.now().toUtc().isBefore(verified.toUtc().subtract(const Duration(minutes: 5)))) {
+        return false;
+      }
+      final status = await offlineVault.readSnapshot(id, '/api/subscription', null);
+      final until = status is Map ? DateTime.tryParse('${status['paidUntil']}') : null;
+      if (status is! Map || status['suspended'] == true || until == null ||
+          !until.isAfter(DateTime.now().toUtc())) return false;
+      _shopId = id;
+      _setOffline(true);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<int> pendingCount() async =>
+      (await offlineVault.readOutbox(savedShopId)).length;
+
+  /// Returns the number of successfully synchronized operations. Failed
+  /// operations are retained, never silently dropped or assigned new IDs.
+  Future<int> synchronize() async {
+    if (_shopId == null) return 0;
+    if (_access == null) await refresh();
+    if (_access == null) throw ApiFailure('الاتصال بالخادم غير متاح للمزامنة.');
+    var completed = 0;
+    final entries = await offlineVault.readOutbox(_shopId!);
+    for (final entry in entries) {
+      if (entry['blocked'] == true) continue;
+      final body = Map<String, dynamic>.from(entry['body'] as Map);
+      try {
+        final response = await request('POST', '/api/transactions', body: body);
+        if (response is Map && response['queued'] == true) break;
+        completed++;
+      } on ApiFailure catch (e) {
+        if ([400, 404, 409, 422].contains(e.status)) continue;
+        rethrow;
+      }
+    }
+    return completed;
+  }
   String? _access, _refresh;
   DateTime? _refreshExpiry;
   int _generation = 0;
   Future<void>? _refreshing;
   Future<void> _writes = Future.value();
   VoidCallback? onSignedOut, onForbidden;
-  bool get signedIn => _access != null;
+  bool get signedIn => _access != null || offlineSession;
   Future<void> _write(Future<void> Function() action) {
     final next = _writes.catchError((_) {}).then((_) => action());
     _writes = next;
@@ -168,12 +248,16 @@ class Api {
 
   Future<void> login(String phone, String password) async {
     final generation = ++_generation;
+    _shopId = null;
+    _setOffline(false);
     try {
       final result = await dio.post(
         '/api/auth/login',
         data: {'phoneNumber': phone, 'password': password},
       );
       await _accept(_responseObject(result.data), generation);
+      // A new identity must not inherit a previous account's offline snapshots.
+      await storage.delete('offline.identity');
     } on DioException catch (e) {
       throw ApiFailure.from(e);
     }
@@ -186,8 +270,14 @@ class Api {
       final saved = jsonDecode(raw) as Map;
       _refresh = saved['refreshToken'] as String;
       _refreshExpiry = DateTime.parse(saved['refreshTokenExpiresAt'] as String);
-      await refresh();
+      try {
+        await refresh();
+      } on ApiFailure catch (e) {
+        if (e.status == null && await _restoreOfflineIdentity()) return;
+        if (e.status == 401) await clear();
+      }
     } catch (_) {
+      // Corrupted local login cannot be trusted for offline access.
       await clear();
     }
   }
@@ -196,23 +286,30 @@ class Api {
       _refreshing ??= _rotate().whenComplete(() => _refreshing = null);
   Future<void> _rotate() async {
     final generation = _generation;
+    if (_refresh == null ||
+        !(_refreshExpiry?.isAfter(DateTime.now()) ?? false)) {
+      await clear();
+      throw ApiFailure('انتهت الجلسة.', status: 401);
+    }
     try {
-      if (_refresh == null ||
-          !(_refreshExpiry?.isAfter(DateTime.now()) ?? false)) {
-        throw ApiFailure('انتهت الجلسة.');
-      }
       final result = await dio.post(
         '/api/auth/refresh',
         data: {'refreshToken': _refresh},
       );
       await _accept(_responseObject(result.data), generation);
-    } catch (_) {
-      // A lost response can consume a rotating token; never replay that token.
-      if (generation == _generation) await clear();
-      throw ApiFailure(
-        'انتهت جلسة الدخول أو تعذّر تجديدها. سجّل الدخول مجدداً.',
-        status: 401,
-      );
+      _setOffline(false);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401 || e.response?.statusCode == 403) {
+        if (generation == _generation) await clear();
+        throw ApiFailure('انتهت جلسة الدخول. سجّل الدخول مجدداً.', status: 401);
+      }
+      if (e.response == null) {
+        // Do not discard an authenticated device's local data on a network loss.
+        // A lost refresh response may rotate the server token; a later 401 then
+        // requires reauthentication, rather than unsafe token replay loops.
+        if (generation == _generation) _setOffline(true);
+      }
+      throw ApiFailure.from(e);
     }
   }
 
@@ -224,13 +321,41 @@ class Api {
   }) async {
     final generation = _generation;
     final original = _access;
+    final readable = method == 'GET';
+    final queuedTransaction = method == 'POST' &&
+        path == '/api/transactions' && body is Map<String, dynamic> &&
+        body['operationId'] is String && _shopId != null;
+    final transactionBody = queuedTransaction ? Map<String, dynamic>.from(body as Map) : null;
+    if (queuedTransaction) {
+      // Durable write first. Sending and crash recovery reuse the same ID.
+      await offlineVault.addTransaction(_shopId!, transactionBody!);
+    }
+
+    Future<dynamic> snapshotOrThrow(ApiFailure error) async {
+      if (readable && _shopId != null && error.status == null) {
+        final saved = await offlineVault.readSnapshot(_shopId!, path, query);
+        if (saved != null) {
+          _setOffline(true);
+          return saved;
+        }
+      }
+      if (queuedTransaction && error.status == null) {
+        _setOffline(true);
+        return {'queued': true, 'operationId': transactionBody!['operationId']};
+      }
+      throw error;
+    }
+
+    if (_access == null) {
+      return snapshotOrThrow(ApiFailure('البيانات غير متاحة محلياً. اتصل بالإنترنت أولاً.'));
+    }
     Future<Response<dynamic>> send() => dio.request(
       path,
       data: body,
       queryParameters: query,
       options: Options(
         method: method,
-        headers: {if (_access != null) 'Authorization': 'Bearer $_access'},
+        headers: {'Authorization': 'Bearer $_access'},
       ),
     );
     try {
@@ -238,11 +363,8 @@ class Api {
       try {
         result = await send();
       } on DioException catch (e) {
-        if (e.response?.statusCode != 401 ||
-            original == null ||
-            generation != _generation) {
-          rethrow;
-        }
+        if (e.response?.statusCode != 401 || original == null ||
+            generation != _generation) rethrow;
         if (_access == original) await refresh();
         if (generation != _generation || _access == null) {
           throw ApiFailure('انتهت الجلسة.', status: 401);
@@ -250,6 +372,13 @@ class Api {
         result = await send();
       }
       if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
+      _setOffline(false);
+      if (readable && _shopId != null) {
+        await offlineVault.saveSnapshot(_shopId!, path, query, result.data);
+      }
+      if (queuedTransaction) {
+        await offlineVault.removeTransaction(_shopId!, '${transactionBody!['operationId']}');
+      }
       return result.data;
     } on DioException catch (e) {
       if (e.response?.statusCode == 403 && path != '/api/subscription') {
@@ -258,14 +387,27 @@ class Api {
       if (e.response?.statusCode == 401 && generation == _generation) {
         await clear();
       }
-      throw ApiFailure.from(e);
+      final failure = ApiFailure.from(e);
+      // Keep rejected financial operations for explicit review, but stop
+      // automatic retries. Never silently lose a locally recorded payment.
+      if (queuedTransaction && _shopId != null &&
+          [400, 404, 409, 422].contains(failure.status)) {
+        await offlineVault.blockTransaction(_shopId!,
+            '${transactionBody!['operationId']}', failure.message);
+      }
+      return snapshotOrThrow(failure);
+    } on ApiFailure catch (e) {
+      return snapshotOrThrow(e);
     }
   }
 
   Future<Json> get(String path, {Json? query}) async =>
       _responseObject(await request('GET', path, query: query));
   Future<void> logout() async {
-    await request('POST', '/api/auth/logout');
+    if ((await pendingCount()) != 0) {
+      throw ApiFailure('توجد حركات لم تتزامن بعد. زامنها قبل تسجيل الخروج حتى لا يتعطل إرسالها.');
+    }
+    if (_access != null) await request('POST', '/api/auth/logout');
     await clear();
   }
 
@@ -274,6 +416,9 @@ class Api {
     _access = null;
     _refresh = null;
     _refreshExpiry = null;
+    _shopId = null;
+    _setOffline(false);
+    await storage.delete('offline.identity');
     onSignedOut?.call();
     await _write(() => storage.delete('session'));
   }

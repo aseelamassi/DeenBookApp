@@ -16,6 +16,8 @@ class ReportsScreen extends StatefulWidget {
 class _ReportsScreenState extends State<ReportsScreen> {
   late DateTimeRange range;
   Future<Json>? future;
+  String selection = 'هذا الشهر';
+
   @override
   void initState() {
     super.initState();
@@ -39,157 +41,171 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return {'summary': r[0], 'cash': r[1]};
   }
 
+  void selectPeriod(String value) {
+    final now = DateTime.now();
+    DateTimeRange next;
+    if (value == 'آخر 7 أيام') {
+      next = DateTimeRange(start: DateTime(now.year, now.month, now.day)
+          .subtract(const Duration(days: 6)), end: now);
+    } else if (value == 'الشهر الماضي') {
+      final first = DateTime(now.year, now.month - 1, 1);
+      next = DateTimeRange(start: first,
+          end: DateTime(now.year, now.month, 0));
+    } else {
+      next = DateTimeRange(start: DateTime(now.year, now.month, 1), end: now);
+    }
+    setState(() {
+      selection = value;
+      range = next;
+      future = load();
+    });
+  }
+
+  Widget explanation(String label, String value) => Padding(
+    padding: const EdgeInsets.only(top: 5),
+    child: Text('$label: $value', style: const TextStyle(color: muted, fontSize: 12)),
+  );
+
   @override
-  Widget build(BuildContext context) => FutureBuilder<Json>(
-    future: future,
-    builder: (context, s) {
-      final ready = s.connectionState == ConnectionState.done && s.hasData;
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('تقارير المحل'),
-          actions: [
-            IconButton(
-              tooltip: 'طباعة التقرير',
-              onPressed: ready
-                  ? () async {
-                      try {
-                        await Exports.report(
-                          Scope.of(context).shopName,
-                          s.data!,
-                          range,
-                        );
-                      } catch (e) {
-                        if (context.mounted) message(context, e);
-                      }
-                    }
-                  : null,
-              icon: const Icon(Icons.print_outlined),
+  Widget build(BuildContext context) {
+    final session = Scope.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('تقارير المحل'),
+        actions: [
+          IconButton(
+            tooltip: 'طباعة التقرير',
+            onPressed: session.isOffline || session.pendingSync > 0 ? null : () async {
+              try {
+                final data = await future;
+                if (data == null || !context.mounted) return;
+                await Exports.report(session.shopName, data, range);
+              } catch (e) {
+                if (context.mounted) message(context, e);
+              }
+            },
+            icon: const Icon(Icons.print_outlined),
+          ),
+        ],
+      ),
+      body: Width(
+        child: ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            const Heading('ملخص حركة المحل'),
+            const Text('اختَر الفترة التي تريد مراجعتها. الذمم بالأسفل هي الأرصدة الحالية، وليست فقط حركات الفترة.',
+                style: TextStyle(color: muted)),
+            const SizedBox(height: 12),
+            Wrap(spacing: 6, children: [
+              for (final label in ['هذا الشهر', 'آخر 7 أيام', 'الشهر الماضي'])
+                ChoiceChip(
+                  label: Text(label),
+                  selected: selection == label,
+                  onSelected: (_) => selectPeriod(label),
+                ),
+            ]),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final next = await showDateRangePicker(
+                  context: context,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime.now(),
+                  initialDateRange: range,
+                );
+                if (next != null) {
+                  setState(() { range = next; selection = 'فترة مخصصة'; future = load(); });
+                }
+              },
+              icon: const Icon(Icons.date_range),
+              label: Text('${day(range.start)} — ${day(range.end)}'),
+            ),
+            if (session.pendingSync > 0 || session.isOffline)
+              Surface(
+                color: const Color(0xFFFFF1DF),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('تنبيه بخصوص الأرقام', style: TextStyle(fontWeight: FontWeight.bold)),
+                    Text(session.isOffline
+                      ? 'هذه أرقام آخر نسخة تم تنزيلها من الخادم، وقد لا تطابق الوضع الحالي.'
+                      : 'هناك ${session.pendingSync} حركة على الجهاز لم تُسجّل على الخادم بعد.'),
+                    const Text('الطباعة متوقفة مؤقتاً إلى أن تتأكد مزامنة البيانات، حتى لا تخرج نسخة محاسبية غير مكتملة.'),
+                  ],
+                ),
+              ),
+            FutureBuilder<Json>(
+              future: future,
+              builder: (context, s) {
+                if (s.hasError) {
+                  return Empty('التقرير غير متاح', '${s.error}',
+                    action: OutlinedButton(
+                      onPressed: () => setState(() => future = load()),
+                      child: const Text('إعادة المحاولة'),
+                    ),
+                  );
+                }
+                if (!s.hasData) {
+                  return const Center(child: Padding(
+                    padding: EdgeInsets.all(32), child: CircularProgressIndicator()));
+                }
+                final summary = Map<String, dynamic>.from(s.data!['summary'] as Map);
+                final cash = Map<String, dynamic>.from(s.data!['cash'] as Map);
+                return Column(children: [
+                  Surface(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Heading('1. المقبوضات والمدفوعات'),
+                      Row(children: [
+                        Expanded(child: metric('قبضنا من الزبائن', summary['received'])),
+                        const SizedBox(width: 8),
+                        Expanded(child: metric('دفعنا للموردين', summary['paid'], color: orange)),
+                      ]),
+                      explanation('ماذا يشمل؟', 'دفعات الزبائن والموردين خلال الفترة، نقداً وبالتحويلات المؤكدة.'),
+                    ],
+                  )),
+                  Surface(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Heading('2. حركة النقد في الصندوق'),
+                      Row(children: [
+                        Expanded(child: metric('نقد دخل', cash['customerCashIn'])),
+                        const SizedBox(width: 8),
+                        Expanded(child: metric('نقد خرج', cash['supplierCashOut'], color: orange)),
+                      ]),
+                      const Divider(height: 26),
+                      metric('صافي حركة النقد', cash['netCash']),
+                      explanation('مهم', 'هذا الفرق بين النقد الداخل والخارج خلال الفترة؛ ليس ربح المحل ولا الرصيد البنكي.'),
+                    ],
+                  )),
+                  Surface(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Heading('3. الديون الحالية'),
+                      Row(children: [
+                        Expanded(child: metric('الزبائن مدينون لنا', summary['receivables'])),
+                        const SizedBox(width: 8),
+                        Expanded(child: metric('نحن مدينون للموردين', summary['payables'], color: orange)),
+                      ]),
+                      explanation('انتبه', 'هذه الأرصدة حتى الآن، مهما كانت الفترة المحددة فوق.'),
+                    ],
+                  )),
+                  const Surface(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Heading('شو التقرير ما بيحسب؟'),
+                      Text('هذا تقرير ذمم وحركة قبض ودفع؛ لا يحسب أرباح المبيعات أو تكلفة البضاعة أو المصاريف التشغيلية.'),
+                    ],
+                  )),
+                ]);
+              },
+            ),
+            OutlinedButton.icon(
+              onPressed: () => open(context, const HistoryScreen()),
+              icon: const Icon(Icons.receipt_long_outlined),
+              label: const Text('عرض الحركات بالتفصيل'),
             ),
           ],
         ),
-        body: Width(
-          child: ListView(
-            padding: const EdgeInsets.all(22),
-            children: [
-              OutlinedButton.icon(
-                onPressed: () async {
-                  final r = await showDateRangePicker(
-                    context: context,
-                    firstDate: DateTime(2000),
-                    lastDate: DateTime.now(),
-                    initialDateRange: range,
-                  );
-                  if (r != null) {
-                    setState(() {
-                      range = r;
-                      future = load();
-                    });
-                  }
-                },
-                icon: const Icon(Icons.date_range),
-                label: Text('${day(range.start)} — ${day(range.end)}'),
-              ),
-              const SizedBox(height: 20),
-              if (s.hasError)
-                Empty(
-                  'تعذّر التحميل',
-                  '${s.error}',
-                  action: OutlinedButton(
-                    onPressed: () => setState(() => future = load()),
-                    child: const Text('إعادة المحاولة'),
-                  ),
-                )
-              else if (!ready)
-                const Center(child: CircularProgressIndicator())
-              else ...[
-                Surface(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Heading('حركة الفترة'),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: metric(
-                              'المقبوضات — كل الوسائل',
-                              s.data!['summary']['received'],
-                            ),
-                          ),
-                          Expanded(
-                            child: metric(
-                              'المدفوعات — كل الوسائل',
-                              s.data!['summary']['paid'],
-                              color: orange,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                Surface(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Heading('الصندوق النقدي'),
-                      metric(
-                        'نقد وارد من الزبائن',
-                        s.data!['cash']['customerCashIn'],
-                      ),
-                      const SizedBox(height: 12),
-                      metric(
-                        'نقد مدفوع للموردين',
-                        s.data!['cash']['supplierCashOut'],
-                      ),
-                      const Divider(height: 30),
-                      metric(
-                        'صافي النقد خلال الفترة',
-                        s.data!['cash']['netCash'],
-                      ),
-                    ],
-                  ),
-                ),
-                Surface(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Heading('الذمم الحالية'),
-                      const Text(
-                        'الأرصدة الآن، بصرف النظر عن الفترة المختارة.',
-                        style: TextStyle(color: muted, fontSize: 12),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: metric(
-                              'على الزبائن',
-                              s.data!['summary']['receivables'],
-                            ),
-                          ),
-                          Expanded(
-                            child: metric(
-                              'للموردين',
-                              s.data!['summary']['payables'],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              OutlinedButton.icon(
-                onPressed: () => open(context, const HistoryScreen()),
-                icon: const Icon(Icons.receipt_long_outlined),
-                label: const Text('سجل المشتريات والمدفوعات'),
-              ),
-            ],
-          ),
-        ),
-      );
-    },
-  );
+      ),
+    );
+  }
 }
 
 class HistoryScreen extends StatefulWidget {

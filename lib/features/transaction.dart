@@ -293,9 +293,10 @@ class _TransactionScreenState extends State<TransactionScreen> {
         '/api/transactions',
         body: pending,
       );
+      final queued = saved is Map && saved['queued'] == true;
       await draft.clear();
-      session.changed();
-      if (receipt && !supplier && kind == 'Payment' && mounted && saved is Map) {
+      await session.updatePending();
+      if (!queued && receipt && !supplier && kind == 'Payment' && mounted && saved is Map) {
         try {
           await Receipts.payment(
             context,
@@ -313,7 +314,9 @@ class _TransactionScreenState extends State<TransactionScreen> {
         }
       }
       if (mounted) {
-        message(context, 'تم حفظ الحركة');
+        message(context, queued
+            ? 'تم حفظ الحركة على الجهاز. ستُرسل عند عودة الإنترنت، ولا يظهر أثرها في رصيد الخادم بعد.'
+            : 'تمت مزامنة الحركة وحفظها على الخادم');
         Navigator.pop(context, true);
       }
     } catch (e) {

@@ -155,7 +155,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             const SizedBox(height: 30),
             const Text(
-              'دخول واحد إلى بيانات محلك المحفوظة سحابياً.',
+              'بيانات محلك تُحفظ على الخادم، ويمكن عرض آخر بيانات محمّلة بدون إنترنت بعد تسجيل الدخول أول مرة.',
               textAlign: TextAlign.center,
               style: TextStyle(color: muted, fontSize: 12),
             ),

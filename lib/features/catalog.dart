@@ -28,6 +28,12 @@ class _CatalogScreenState extends State<CatalogScreen> {
   bool busy = true;
   String? error, filter, category;
   String sort = 'balance';
+  String get sortLabel => const {
+    'balance': 'الأعلى رصيداً',
+    'balanceAsc': 'الأقل رصيداً',
+    'recent': 'آخر حركة',
+    'name': 'الاسم',
+  }[sort] ?? 'الأعلى رصيداً';
   bool get supplier => widget.mode == 'suppliers';
   bool get products => widget.mode == 'products';
   bool get modern => Scope.of(context).ledgerV2;
@@ -250,10 +256,11 @@ class _CatalogScreenState extends State<CatalogScreen> {
           children: [
             Heading(
               title,
-              action: IconButton.filled(
-                tooltip: 'إضافة',
+              action: FilledButton.icon(
                 onPressed: add,
                 icon: const Icon(Icons.add),
+                label: Text(products ? 'إضافة صنف' :
+                    supplier ? 'إضافة مورد' : 'إضافة زبون'),
               ),
             ),
             Text(
@@ -370,28 +377,32 @@ class _CatalogScreenState extends State<CatalogScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: sort,
-                decoration: const InputDecoration(labelText: 'ترتيب حسب'),
-                isExpanded: true,
-                items:
-                    {
-                          'balance': 'الأعلى رصيداً',
-                          if (modern) 'balanceAsc': 'الأقل رصيداً',
-                          if (modern) 'recent': 'آخر حركة',
-                          'name': 'الاسم',
-                        }.entries
-                        .map(
-                          (e) => DropdownMenuItem(
-                            value: e.key,
-                            child: Text(e.value),
-                          ),
-                        )
-                        .toList(),
-                onChanged: (v) {
-                  sort = v!;
-                  load();
-                },
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: PopupMenuButton<String>(
+                  tooltip: 'ترتيب حسب',
+                  initialValue: sort,
+                  onSelected: (value) {
+                    setState(() => sort = value);
+                    load();
+                  },
+                  itemBuilder: (context) => {
+                    'balance': 'الأعلى رصيداً',
+                    if (modern) 'balanceAsc': 'الأقل رصيداً',
+                    if (modern) 'recent': 'آخر حركة',
+                    'name': 'الاسم',
+                  }.entries.map((e) => PopupMenuItem<String>(
+                    value: e.key, child: Text(e.value))).toList(),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.sort_rounded, size: 20),
+                      const SizedBox(width: 6),
+                      Text('ترتيب حسب: $sortLabel'),
+                      const Icon(Icons.keyboard_arrow_down),
+                    ]),
+                  ),
+                ),
               ),
             ],
             if ((supplier || products) &&

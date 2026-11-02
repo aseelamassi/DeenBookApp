@@ -95,13 +95,13 @@ class _AccountHelpState extends State<AccountHelp> {
       child: ListView(
         padding: const EdgeInsets.all(22),
         children: [
-          Heading(widget.reset ? 'نساعدك ترجع لحسابك' : 'ابدأ دفتر محلك'),
+          Heading(widget.reset ? 'نساعدك ترجع لحسابك' : 'جرّب دفتر الأمانة 14 يوم مجاناً'),
           Text(
             widget.reset
                 ? 'تواصل مع إدارة الخدمة لاستعادة الوصول إلى حسابك.'
                 : hasSupportContact
-                ? 'اختر مدة الاشتراك، ثم افتح واتساب وأرسل الطلب للإدارة للحصول على طريقة الدفع وبيانات الدخول.'
-                : 'اختر مدة الاشتراك وجهّز تفاصيل طلبك. التواصل مع الإدارة من التطبيق غير متاح حالياً؛ عرض الطلب أو نسخه لا يرسله.',
+                ? 'اطلب إنشاء حساب وتجربة مجانية لمدة 14 يوماً. بعد التجربة يمكنك اختيار اشتراك شهري أو ثلاثة أشهر.'
+                : 'اطلب تجربة مجانية لمدة 14 يوماً. إذا لم يكن التواصل مفعلاً، انسخ تفاصيل الطلب وأرسلها للإدارة بنفسك.',
             style: const TextStyle(color: muted),
           ),
           const SizedBox(height: 24),
@@ -150,7 +150,7 @@ class _AccountHelpState extends State<AccountHelp> {
           ),
           const SizedBox(height: 16),
           const Text(
-            'لا يُفعّل الاشتراك قبل تأكيد الدفع من الإدارة.',
+            'تبدأ التجربة المجانية عند إنشاء الحساب من الإدارة؛ الاشتراك المدفوع يحتاج تأكيد الدفع.',
             textAlign: TextAlign.center,
             style: TextStyle(color: muted, fontSize: 12),
           ),
@@ -194,7 +194,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                   ),
                   const SizedBox(height: 12),
                   Heading(
-                    s.active
+                    s.isTrial && s.active
+                        ? 'تجربتك المجانية فعّالة'
+                        : s.active
                         ? 'اشتراكك فعّال'
                         : s.status?['suspended'] == true
                         ? 'الحساب موقوف'
@@ -202,7 +204,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                   ),
                   Text(s.shopName),
                   Text(
-                    'صالح حتى ${day(s.status?['paidUntil'])}',
+                    s.isTrial
+                        ? 'متبقي ${s.trialDaysRemaining} يوم من التجربة — تنتهي ${day(s.status?['paidUntil'])}'
+                        : 'صالح حتى ${day(s.status?['paidUntil'])}',
                     style: const TextStyle(color: muted),
                   ),
                   if (!s.active)

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/api.dart';
 import '../core/session.dart';
@@ -8,6 +9,7 @@ import 'catalog.dart';
 import 'profile.dart';
 import 'reports.dart';
 import 'transaction.dart';
+import 'sync_center.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -15,8 +17,44 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
+class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   int tab = 0;
+  Timer? _syncTimer;
+  bool _initialized = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_initialized) return;
+    _initialized = true;
+    WidgetsBinding.instance.addObserver(this);
+    // Keep retrying; successful requests are deduplicated by operationId.
+    _syncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+      if (!mounted) return;
+      final session = Scope.of(context);
+      if (session.pendingSync > 0 || session.isOffline) {
+        session.synchronize();
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Scope.of(context).synchronize();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      Scope.of(context).synchronize();
+    }
+  }
+
+  @override
+  void dispose() {
+    _syncTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final session = Scope.of(context);
@@ -56,6 +94,23 @@ class _AppShellState extends State<AppShell> {
             ],
           ),
           actions: [
+            IconButton(
+              tooltip: 'مزامنة البيانات',
+              onPressed: session.syncing ? null : () async {
+                final count = await session.synchronize();
+                if (context.mounted) {
+                  message(context, session.syncError ??
+                      (count > 0 ? 'تمت مزامنة $count حركة بنجاح' :
+                      'لا توجد حركات جديدة للمزامنة'));
+                }
+              },
+              icon: session.syncing
+                  ? const SizedBox(width: 19, height: 19,
+                      child: CircularProgressIndicator(strokeWidth: 2,
+                          color: Colors.white))
+                  : Icon(session.isOffline ? Icons.cloud_off_outlined :
+                      Icons.sync_rounded),
+            ),
             IconButton(
               tooltip: 'حركة بصوتك',
               onPressed: () =>
@@ -135,6 +190,17 @@ class _AppShellState extends State<AppShell> {
                 ),
                 const Divider(),
                 ListTile(
+                  leading: const Icon(Icons.sync_outlined),
+                  title: const Text('مركز المزامنة'),
+                  subtitle: Text(session.pendingSync == 0
+                      ? 'لا توجد حركات بانتظار الإرسال'
+                      : '${session.pendingSync} حركة محفوظة على الجهاز'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    open(context, const SyncCenterScreen());
+                  },
+                ),
+                ListTile(
                   leading: const Icon(Icons.logout),
                   title: const Text('تسجيل الخروج'),
                   onTap: () async {
@@ -158,13 +224,58 @@ class _AppShellState extends State<AppShell> {
           ),
         ),
         body: SafeArea(
-          child: KeyedSubtree(
-            key: ValueKey('$tab:${session.revision}'),
-            child: tab == 0
-                ? HomeScreen(onCustomers: () => setState(() => tab = 1))
-                : CatalogScreen(
-                    mode: ['', 'customers', 'suppliers', 'products'][tab],
+          child: Column(
+            children: [
+              if (session.isOffline || session.pendingSync > 0)
+                Material(
+                  color: session.isOffline
+                      ? const Color(0xFFFFF0DF)
+                      : const Color(0xFFEEF5FF),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      children: [
+                        Icon(session.isOffline ? Icons.cloud_off_outlined :
+                            Icons.cloud_upload_outlined, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(session.isOffline
+                            ? 'وضع دون إنترنت: المعروض من آخر تحميل. ${session.pendingSync} حركة تنتظر المزامنة.'
+                            : '${session.pendingSync} حركة محفوظة بانتظار المزامنة.',
+                            style: const TextStyle(fontSize: 12))),
+                        TextButton(onPressed: () => open(context,
+                            const SyncCenterScreen()), child: const Text('التفاصيل')),
+                      ],
+                    ),
                   ),
+                ),
+              if (session.isTrial)
+                Material(
+                  color: const Color(0xFFEAF6ED),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                    child: Row(children: [
+                      const Icon(Icons.workspace_premium_outlined, size: 18),
+                      const SizedBox(width: 7),
+                      Expanded(child: Text(
+                        'تجربة مجانية: متبقي ${session.trialDaysRemaining} يوم',
+                        style: const TextStyle(fontSize: 12))),
+                      TextButton(onPressed: () => open(context,
+                          const SubscriptionScreen()),
+                          child: const Text('الاشتراك')),
+                    ]),
+                  ),
+                ),
+              Expanded(
+                child: KeyedSubtree(
+                  key: ValueKey('$tab:${session.revision}'),
+                  child: tab == 0
+                      ? HomeScreen(onCustomers: () => setState(() => tab = 1))
+                      : CatalogScreen(
+                          mode: ['', 'customers', 'suppliers', 'products'][tab],
+                        ),
+                ),
+              ),
+            ],
           ),
         ),
         floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
@@ -347,7 +458,7 @@ class HomeScreen extends StatelessWidget {
                     if (recent.isEmpty)
                       Empty(
                         'لا توجد حركات بعد',
-                        'الحركات التي تسجلها ستظهر هنا.',
+                        'ابدأ بإضافة زبون، ثم سجّل عليه ديناً أو دفعة. الحركات المزامنة تظهر هنا.',
                         action: OutlinedButton.icon(
                           onPressed: () =>
                               open(context, const PartyForm(supplier: false)),

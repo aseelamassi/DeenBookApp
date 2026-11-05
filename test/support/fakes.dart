@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:deenbook/core/api.dart';
 import 'package:deenbook/core/session.dart';
@@ -126,7 +127,8 @@ Future<Session> fakeSession({
           'name': 'محل الأمانة',
           'active': active,
           'suspended': false,
-          'paidUntil': '2026-11-20T00:00:00Z',
+          // Keep visual fixtures active independently of the test run date.
+          'paidUntil': '2099-11-20T00:00:00Z',
         });
       case '/api/settings':
         return response({

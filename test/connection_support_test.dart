@@ -12,9 +12,15 @@ import 'support/fakes.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
+    await (FontLoader(
+      'Symbols',
+    )..addFont(rootBundle.load('assets/fonts/Symbols.ttf'))).load();
     await (FontLoader('Cairo')
           ..addFont(rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
-          ..addFont(rootBundle.load('assets/fonts/Cairo-Bold.ttf')))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-SemiBold.ttf'))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-ExtraBold.ttf'))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-Black.ttf')))
         .load();
   });
 

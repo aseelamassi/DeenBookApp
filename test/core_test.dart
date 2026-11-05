@@ -95,26 +95,29 @@ void main() {
       expect(store.values['session'], isNot(contains('accessToken')));
     },
   );
-  test('refresh timeout preserves stored credentials for offline recovery', () async {
-    final store = MemoryStorage();
-    var refreshes = 0;
-    final dio = Dio(BaseOptions(baseUrl: 'https://test.invalid'));
-    dio.httpClientAdapter = Adapter((r) {
-      if (r.path.endsWith('/login')) return response(token());
-      refreshes++;
-      throw DioException(
-        requestOptions: r,
-        type: DioExceptionType.receiveTimeout,
-      );
-    });
-    final api = Api(store, client: dio);
-    await api.login('phone', 'test');
-    await expectLater(api.refresh(), throwsA(isA<ApiFailure>()));
-    expect(api.signedIn, true);
-    expect(store.values['session'], isNotNull);
-    await expectLater(api.refresh(), throwsA(isA<ApiFailure>()));
-    expect(refreshes, 2);
-  });
+  test(
+    'refresh timeout preserves stored credentials for offline recovery',
+    () async {
+      final store = MemoryStorage();
+      var refreshes = 0;
+      final dio = Dio(BaseOptions(baseUrl: 'https://test.invalid'));
+      dio.httpClientAdapter = Adapter((r) {
+        if (r.path.endsWith('/login')) return response(token());
+        refreshes++;
+        throw DioException(
+          requestOptions: r,
+          type: DioExceptionType.receiveTimeout,
+        );
+      });
+      final api = Api(store, client: dio);
+      await api.login('phone', 'test');
+      await expectLater(api.refresh(), throwsA(isA<ApiFailure>()));
+      expect(api.signedIn, true);
+      expect(store.values['session'], isNotNull);
+      await expectLater(api.refresh(), throwsA(isA<ApiFailure>()));
+      expect(refreshes, 2);
+    },
+  );
   test('logout while refresh is in flight cannot resurrect session', () async {
     final gate = Completer<void>(), started = Completer<void>();
     final store = MemoryStorage();

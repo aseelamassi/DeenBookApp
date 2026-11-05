@@ -2,6 +2,24 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:deenbook/core/ledger.dart';
 
 void main() {
+  test(
+    'filtered history excludes pending transfers and keeps cent precision',
+    () {
+      final rows = [
+        {'kind': 'Debt', 'amount': 100.25, 'discount': 10.05, 'paidNow': 20.55},
+        {'kind': 'Payment', 'amount': 90.20},
+        {'kind': 'Payment', 'amount': 500, 'pendingConfirmation': true},
+        {'kind': 'Return', 'amount': 12},
+      ];
+      expect(historyTotals(rows, supplier: false), {
+        'invoices': 90.20,
+        'received': 110.75,
+        'paid': 0,
+        'pendingCount': 1,
+      });
+      expect(historyTotals(rows, supplier: true)['paid'], 110.75);
+    },
+  );
   test('quantities support Arabic digits with three decimals', () {
     expect(quantityMillis('٢٫٥٢٥'), 2525);
     expect(quantityMillis('۰.۵'), 500);

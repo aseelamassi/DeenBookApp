@@ -1,9 +1,14 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
+
 import '../core/api.dart';
 import '../core/session.dart';
 import '../services/receipts.dart';
 import '../ui/theme.dart';
+import '../ui/design.dart';
+import '../core/format.dart';
+import '../services/export.dart';
 import '../ui/widgets.dart';
 import 'catalog.dart';
 import 'profile.dart';
@@ -64,165 +69,116 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         appBar: AppBar(
           backgroundColor: navy,
           foregroundColor: Colors.white,
-          toolbarHeight: 76,
+          toolbarHeight: 68,
+          leadingWidth: 70,
+          titleSpacing: 0,
           leading: Builder(
-            builder: (c) => IconButton(
-              tooltip: 'البروفايل',
-              onPressed: () => Scaffold.of(c).openDrawer(),
-              icon: const CircleAvatar(
-                backgroundColor: orange,
-                child: Icon(Icons.person_outline, color: Colors.white),
+            builder: (c) => Padding(
+              padding: const EdgeInsetsDirectional.only(start: 16, end: 10),
+              child: Center(
+                child: InkWell(
+                  onTap: () => Scaffold.of(c).openDrawer(),
+                  child: Tooltip(
+                    message: 'البروفايل',
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: orange,
+                        borderRadius: BorderRadius.circular(17),
+                        border: Border.all(color: Colors.white38, width: 2),
+                      ),
+                      child: Text(
+                        session.shopName.characters.first,
+                        style: appText(
+                          21,
+                          weight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                session.shopName,
-                style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+          title: Builder(
+            builder: (c) => InkWell(
+              onTap: () => Scaffold.of(c).openDrawer(),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    session.shopName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: appText(
+                      14,
+                      weight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
+                  Text(
+                    'المستخدم: ${session.settings?['ownerName'] ?? 'المالك'} (المالك)',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: appText(
+                      10,
+                      weight: FontWeight.w600,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
               ),
-              Text(
-                session.settings?['ownerName'] ?? 'دفتر الأمانة',
-                style: TextStyle(fontSize: 11, color: Colors.white70),
-              ),
-            ],
+            ),
           ),
           actions: [
-            IconButton(
-              tooltip: 'مزامنة البيانات',
-              onPressed: session.syncing ? null : () async {
-                final count = await session.synchronize();
-                if (context.mounted) {
-                  message(context, session.syncError ??
-                      (count > 0 ? 'تمت مزامنة $count حركة بنجاح' :
-                      'لا توجد حركات جديدة للمزامنة'));
-                }
-              },
-              icon: session.syncing
-                  ? const SizedBox(width: 19, height: 19,
-                      child: CircularProgressIndicator(strokeWidth: 2,
-                          color: Colors.white))
-                  : Icon(session.isOffline ? Icons.cloud_off_outlined :
-                      Icons.sync_rounded),
+            headerAction(
+              Icons.mic_none_rounded,
+              'تسجيل صوتي سريع',
+              () => open(context, const TransactionScreen(voice: true)),
             ),
-            IconButton(
-              tooltip: 'حركة بصوتك',
-              onPressed: () =>
-                  open(context, const TransactionScreen(voice: true)),
-              icon: const Icon(Icons.mic_none),
+            headerAction(
+              Icons.insert_chart_outlined_rounded,
+              'التقارير',
+              () => open(context, const HistoryScreen()),
             ),
-            IconButton(
-              tooltip: 'التقارير الشهرية',
-              onPressed: () => open(context, const ReportsScreen()),
-              icon: const Icon(Icons.bar_chart_rounded),
+            Padding(
+              padding: const EdgeInsetsDirectional.only(start: 3, end: 16),
+              child: Center(
+                child: InkWell(
+                  onTap: () => open(context, const SyncCenterScreen()),
+                  child: Container(
+                    height: 40,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: .14),
+                      border: Border.all(color: Colors.white24),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      session.syncing
+                          ? 'مزامنة…'
+                          : session.isOffline
+                          ? 'محلي'
+                          : session.pendingSync > 0
+                          ? '${session.pendingSync} معلّقة'
+                          : 'محفوظ ✓',
+                      style: appText(
+                        11,
+                        weight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
-            const SizedBox(width: 6),
           ],
         ),
-        drawer: Drawer(
-          child: SafeArea(
-            child: ListView(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const CircleAvatar(
-                        radius: 28,
-                        child: Icon(Icons.storefront, size: 30),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        session.shopName,
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                      const Text(
-                        'إدارة المحل والحساب',
-                        style: TextStyle(color: muted),
-                      ),
-                    ],
-                  ),
-                ),
-                ...[
-                  (
-                    'بيانات المحل',
-                    Icons.storefront_outlined,
-                    const SettingsScreen(),
-                  ),
-                  (
-                    'الاشتراكات والتجديد',
-                    Icons.workspace_premium_outlined,
-                    const SubscriptionScreen(),
-                  ),
-                  ('العاملون', Icons.badge_outlined, const WorkersScreen()),
-                  ('التقارير', Icons.bar_chart_rounded, const ReportsScreen()),
-                  (
-                    'سجل المشتريات والمدفوعات',
-                    Icons.receipt_long_outlined,
-                    const HistoryScreen(),
-                  ),
-                  (
-                    'النسخ الاحتياطي',
-                    Icons.cloud_download_outlined,
-                    const BackupScreen(),
-                  ),
-                  (
-                    'تغيير كلمة المرور',
-                    Icons.lock_outline,
-                    const PasswordScreen(),
-                  ),
-                ].map(
-                  (item) => ListTile(
-                    leading: Icon(item.$2),
-                    title: Text(item.$1),
-                    onTap: () {
-                      Navigator.pop(context);
-                      open(context, item.$3);
-                    },
-                  ),
-                ),
-                const Divider(),
-                ListTile(
-                  leading: const Icon(Icons.sync_outlined),
-                  title: const Text('مركز المزامنة'),
-                  subtitle: Text(session.pendingSync == 0
-                      ? 'لا توجد حركات بانتظار الإرسال'
-                      : '${session.pendingSync} حركة محفوظة على الجهاز'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    open(context, const SyncCenterScreen());
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.logout),
-                  title: const Text('تسجيل الخروج'),
-                  onTap: () async {
-                    Navigator.pop(context);
-                    if (!await confirm(
-                      context,
-                      'تسجيل الخروج',
-                      'سيتم إنهاء جلسات هذا الحساب على جميع الأجهزة. هل تريد المتابعة؟',
-                    )) {
-                      return;
-                    }
-                    try {
-                      await session.api.logout();
-                    } catch (e) {
-                      if (context.mounted) message(context, e);
-                    }
-                  },
-                ),
-              ],
-            ),
-          ),
-        ),
+        drawer: const ShopDrawer(),
         body: SafeArea(
           child: Column(
             children: [
@@ -232,18 +188,32 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                       ? const Color(0xFFFFF0DF)
                       : const Color(0xFFEEF5FF),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                     child: Row(
                       children: [
-                        Icon(session.isOffline ? Icons.cloud_off_outlined :
-                            Icons.cloud_upload_outlined, size: 20),
+                        Icon(
+                          session.isOffline
+                              ? Icons.cloud_off_outlined
+                              : Icons.cloud_upload_outlined,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
-                        Expanded(child: Text(session.isOffline
-                            ? 'وضع دون إنترنت: المعروض من آخر تحميل. ${session.pendingSync} حركة تنتظر المزامنة.'
-                            : '${session.pendingSync} حركة محفوظة بانتظار المزامنة.',
-                            style: const TextStyle(fontSize: 12))),
-                        TextButton(onPressed: () => open(context,
-                            const SyncCenterScreen()), child: const Text('التفاصيل')),
+                        Expanded(
+                          child: Text(
+                            session.isOffline
+                                ? 'وضع دون إنترنت: المعروض من آخر تحميل. ${session.pendingSync} حركة تنتظر المزامنة.'
+                                : '${session.pendingSync} حركة محفوظة بانتظار المزامنة.',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () =>
+                              open(context, const SyncCenterScreen()),
+                          child: const Text('التفاصيل'),
+                        ),
                       ],
                     ),
                   ),
@@ -252,17 +222,27 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                 Material(
                   color: const Color(0xFFEAF6ED),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-                    child: Row(children: [
-                      const Icon(Icons.workspace_premium_outlined, size: 18),
-                      const SizedBox(width: 7),
-                      Expanded(child: Text(
-                        'تجربة مجانية: متبقي ${session.trialDaysRemaining} يوم',
-                        style: const TextStyle(fontSize: 12))),
-                      TextButton(onPressed: () => open(context,
-                          const SubscriptionScreen()),
-                          child: const Text('الاشتراك')),
-                    ]),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 7,
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.workspace_premium_outlined, size: 18),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            'تجربة مجانية: متبقي ${session.trialDaysRemaining} يوم',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () =>
+                              open(context, const SubscriptionScreen()),
+                          child: const Text('الاشتراك'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               Expanded(
@@ -290,17 +270,19 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           child: const Icon(Icons.add, size: 32),
         ),
         bottomNavigationBar: BottomAppBar(
-          height: 76,
+          height: 64,
           padding: const EdgeInsets.symmetric(horizontal: 4),
           notchMargin: 7,
-          shape: const CircularNotchedRectangle(),
+          color: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
           child: Row(
             children: [
               nav(0, 'الرئيسية', Icons.home_outlined),
               nav(1, 'الزبائن', Icons.people_outline),
               const SizedBox(width: 58),
               nav(2, 'الموردون', Icons.local_shipping_outlined),
-              nav(3, 'الأصناف', Icons.inventory_2_outlined),
+              nav(3, 'الأصناف', Icons.shopping_bag_outlined),
             ],
           ),
         ),
@@ -317,7 +299,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: tab == i ? orange : muted, size: 23),
+            Icon(icon, color: tab == i ? navy : muted, size: 23),
             const SizedBox(height: 4),
             FittedBox(
               child: Text(
@@ -325,7 +307,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                 style: TextStyle(
                   fontSize: 11,
                   color: tab == i ? navy : muted,
-                  fontWeight: tab == i ? FontWeight.bold : FontWeight.normal,
+                  fontWeight: tab == i ? FontWeight.w900 : FontWeight.w700,
                 ),
               ),
             ),
@@ -347,7 +329,7 @@ class HomeScreen extends StatelessWidget {
       child: Width(
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(18, 24, 18, 36),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
           children: [
             Remote(
               load: () async {
@@ -386,33 +368,58 @@ class HomeScreen extends StatelessWidget {
                 };
               },
               builder: (data) {
-                final s = data['summary'] as Map;
+                final summary = data['summary'] as Map;
                 final recent = data['recent'] as List;
+                final debtors = (data['topDebtors'] as List? ?? []).take(3);
                 return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Surface(
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'ملخص الذمم المالية',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 18),
                           Row(
                             children: [
                               Expanded(
-                                child: metric(
-                                  'مستحق على الزبائن',
-                                  s['receivables'],
+                                child: Text(
+                                  'ملخص الذمم المالية',
+                                  style: appText(16, weight: FontWeight.w800),
                                 ),
                               ),
-                              const SizedBox(width: 16),
+                              SoftTag(
+                                session.isOffline
+                                    ? 'محفوظ على الجهاز'
+                                    : session.pendingSync > 0
+                                    ? 'بانتظار المزامنة'
+                                    : 'حفظ تلقائي فوري ✓',
+                                color: green,
+                                background: const Color(0xFFECFDF5),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            children: [
                               Expanded(
-                                child: metric(
-                                  'مستحق للموردين',
-                                  s['payables'],
-                                  color: orange,
+                                child: BalanceBox(
+                                  'لي على الزبائن',
+                                  summary['receivables'],
+                                  Icons.south_west,
+                                  (summary['receivables'] as num? ?? 0) > 0
+                                      ? 'مستحقات لدى الزبائن'
+                                      : 'لا توجد مستحقات على الزبائن',
+                                  orange,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: BalanceBox(
+                                  'عليّ للموردين',
+                                  summary['payables'],
+                                  Icons.north_east,
+                                  (summary['payables'] as num? ?? 0) > 0
+                                      ? 'مستحقات للموردين'
+                                      : 'لا توجد مستحقات للموردين',
+                                  navy,
                                 ),
                               ),
                             ],
@@ -423,38 +430,127 @@ class HomeScreen extends StatelessWidget {
                     Row(
                       children: [
                         Expanded(
-                          child: BusyButton(
-                            label: 'تسجيل دين',
-                            background: orange,
+                          child: DesignButton(
+                            'تسجيل مشتريات (دين)',
                             icon: Icons.add,
-                            onPressed: () =>
+                            background: orange,
+                            foreground: Colors.white,
+                            height: 50,
+                            onTap: () =>
                                 open(context, const TransactionScreen()),
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: FilledButton.icon(
-                            onPressed: () => open(
+                          child: DesignButton(
+                            'قبض دفعة / سداد',
+                            icon: Icons.check,
+                            background: navy,
+                            foreground: Colors.white,
+                            height: 50,
+                            onTap: () => open(
                               context,
                               const TransactionScreen(kind: 'Payment'),
                             ),
-                            icon: const Icon(Icons.payments_outlined),
-                            label: const Text('تسجيل دفعة'),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 18),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton.icon(
-                        onPressed: onCustomers,
-                        icon: const Icon(Icons.people_outline),
-                        label: const Text('عرض حسابات الزبائن'),
+                    const SizedBox(height: 14),
+                    if (debtors.isNotEmpty)
+                      Surface(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.circle,
+                                  size: 9,
+                                  color: orange,
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'أبرز المدينين وحسابات للمتابعة',
+                                    style: appText(14, weight: FontWeight.w800),
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: onCustomers,
+                                  child: const Text('عرض الكل'),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              'مرتبة حسب أعلى رصيد قائم بذمة الزبون',
+                              style: appText(
+                                11,
+                                color: muted,
+                                weight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            ...debtors.map(
+                              (p) => Container(
+                                margin: const EdgeInsets.only(bottom: 6),
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF7F8FB),
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: lineColor),
+                                ),
+                                child: InkWell(
+                                  onTap: () =>
+                                      open(context, PartyDetail(id: p['id'])),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              '${p['name']}',
+                                              style: appText(
+                                                14,
+                                                weight: FontWeight.w800,
+                                              ),
+                                            ),
+                                            if ('${p['paymentSchedule'] ?? ''}'
+                                                .isNotEmpty)
+                                              Text(
+                                                '${p['paymentSchedule']}',
+                                                style: appText(
+                                                  11,
+                                                  color: muted,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Column(
+                                        children: [
+                                          amount(
+                                            p['balance'],
+                                            size: 16,
+                                            color: orange,
+                                          ),
+                                          Text(
+                                            'عليه دين',
+                                            style: appText(10, color: muted),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    const Heading('آخر حركات الزبائن'),
                     if (recent.isEmpty)
                       Empty(
                         'لا توجد حركات بعد',
@@ -469,23 +565,354 @@ class HomeScreen extends StatelessWidget {
                     else
                       Surface(
                         child: Column(
-                          children: recent
-                              .map(
-                                (e) => entryTile(
-                                  Map<String, dynamic>.from(e),
-                                  name: data['names'][e['partyId']],
-                                  onConfirm: () => Receipts.confirmTransfer(
-                                    context,
-                                    Map<String, dynamic>.from(e),
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.receipt_long_outlined,
+                                  size: 18,
+                                  color: navy,
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'آخر حركات الزبائن',
+                                    style: appText(14, weight: FontWeight.w800),
                                   ),
                                 ),
-                              )
-                              .toList(),
+                                Text(
+                                  'تحديث فوري',
+                                  style: appText(11, color: muted),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            ...recent.map(
+                              (e) => entryTile(
+                                Map<String, dynamic>.from(e),
+                                name: data['names'][e['partyId']],
+                                onConfirm: () => Receipts.confirmTransfer(
+                                  context,
+                                  Map<String, dynamic>.from(e),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                   ],
                 );
               },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+Widget headerAction(IconData icon, String tooltip, VoidCallback onTap) =>
+    Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: Center(
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: .14),
+            border: Border.all(color: Colors.white24),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: IconButton(
+            tooltip: tooltip,
+            onPressed: onTap,
+            icon: Icon(icon, size: 21, color: Colors.white),
+            padding: EdgeInsets.zero,
+          ),
+        ),
+      ),
+    );
+
+class BalanceBox extends StatelessWidget {
+  const BalanceBox(
+    this.label,
+    this.value,
+    this.icon,
+    this.caption,
+    this.accent, {
+    super.key,
+  });
+  final String label, caption;
+  final dynamic value;
+  final IconData icon;
+  final Color accent;
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: lavender,
+      borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: const Color(0xFFD5DAF3)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text(label, style: appText(12))),
+            Container(
+              width: 24,
+              height: 24,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 14, color: accent),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: FittedBox(child: amount(value, size: 30)),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          '• $caption',
+          style: appText(10, color: secondaryText, weight: FontWeight.w600),
+        ),
+      ],
+    ),
+  );
+}
+
+class ShopDrawer extends StatelessWidget {
+  const ShopDrawer({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final s = Scope.of(context);
+    void go(Widget child) {
+      Navigator.pop(context);
+      open(context, child);
+    }
+
+    Widget tile(
+      String title,
+      String subtitle,
+      IconData icon,
+      VoidCallback tap, {
+      bool featured = false,
+    }) => Padding(
+      padding: EdgeInsets.only(bottom: featured ? 10 : 4),
+      child: Material(
+        color: featured ? lavender : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: featured
+              ? const BorderSide(color: Color(0xFFD5DAF3))
+              : BorderSide.none,
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: tap,
+          child: Padding(
+            padding: EdgeInsets.all(featured ? 14 : 10),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: featured ? Colors.white : const Color(0xFFF7F8FB),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: lineColor),
+                  ),
+                  child: Icon(icon, color: navy, size: 22),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: appText(14, weight: FontWeight.w800)),
+                      Text(
+                        subtitle,
+                        style: appText(
+                          11,
+                          color: muted,
+                          weight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return Drawer(
+      width: MediaQuery.sizeOf(context).width.clamp(0, 480) * .86,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: navy,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      s.shopName.characters.first,
+                      style: appText(
+                        26,
+                        weight: FontWeight.w900,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          s.shopName,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: appText(16, weight: FontWeight.w900),
+                        ),
+                        Text(
+                          'المالك: ${s.settings?['ownerName'] ?? ''}',
+                          style: appText(12, color: secondaryText),
+                        ),
+                        Text(
+                          'المستخدم الحالي: المالك',
+                          style: appText(11, color: navy),
+                        ),
+                        const SizedBox(height: 4),
+                        SoftTag(
+                          s.active ? 'تطبيق دفتر دين نشط ✓' : 'بانتظار التجديد',
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    tooltip: 'إغلاق القائمة',
+                    icon: const Icon(
+                      Icons.close,
+                      size: 18,
+                      color: secondaryText,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Divider(height: 1),
+            ),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  tile(
+                    'الاشتراك والتجديد',
+                    '${s.isTrial ? 'تجربة مجانية' : 'اشتراك المحل'} · حتى ${day(s.status?['paidUntil'])}',
+                    Icons.credit_card_outlined,
+                    () => go(const SubscriptionScreen()),
+                    featured: true,
+                  ),
+                  tile(
+                    'العاملون',
+                    'إدارة الفريق والتبديل وقت الدوام',
+                    Icons.people_alt_outlined,
+                    () => go(const WorkersScreen()),
+                    featured: true,
+                  ),
+                  const SizedBox(height: 14),
+                  tile(
+                    'الملف الشخصي وإعدادات المحل',
+                    'اسم المتجر، الهواتف، إعدادات الحساب',
+                    Icons.settings_outlined,
+                    () => go(const SettingsScreen()),
+                  ),
+                  tile(
+                    'الحفظ والنسخ الاحتياطي',
+                    'فحص وحماية بيانات دفتر دين',
+                    Icons.cloud_outlined,
+                    () => go(const BackupScreen()),
+                  ),
+                  tile(
+                    'التقارير وكشوف الحسابات',
+                    'طباعة وتصدير الحركات',
+                    Icons.bar_chart_rounded,
+                    () => go(const HistoryScreen()),
+                  ),
+                  tile(
+                    'تصدير نسخة احتياطية محلية',
+                    'تنزيل نسخة محلية (.json)',
+                    Icons.download_outlined,
+                    () async {
+                      try {
+                        final data = await s.api.get('/api/backup/export');
+                        if (context.mounted) {
+                          await Exports.backup(data, context);
+                        }
+                      } catch (e) {
+                        if (context.mounted) message(context, e);
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+              decoration: const BoxDecoration(
+                color: Color(0xFFF8FAFC),
+                border: Border(top: BorderSide(color: lineColor)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  DesignButton(
+                    'تسجيل الخروج / تبديل الحساب',
+                    background: paleOrange,
+                    foreground: orange,
+                    onTap: () async {
+                      if (!await confirm(
+                        context,
+                        'تسجيل الخروج',
+                        'سيتم تسجيل الخروج من جميع الأجهزة. هل تريد المتابعة؟',
+                      )) {
+                        return;
+                      }
+                      try {
+                        await s.api.logout();
+                      } catch (e) {
+                        if (context.mounted) message(context, e);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'تطبيق دفتر دين v1.2.1 · حفظ ومزامنة البيانات',
+                    textAlign: TextAlign.center,
+                    style: appText(10, color: muted),
+                  ),
+                ],
+              ),
             ),
           ],
         ),

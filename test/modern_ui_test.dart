@@ -15,9 +15,15 @@ import 'support/fakes.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
+    await (FontLoader(
+      'Symbols',
+    )..addFont(rootBundle.load('assets/fonts/Symbols.ttf'))).load();
     await (FontLoader('Cairo')
           ..addFont(rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
-          ..addFont(rootBundle.load('assets/fonts/Cairo-Bold.ttf')))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-SemiBold.ttf'))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-ExtraBold.ttf'))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-Black.ttf')))
         .load();
     await (FontLoader(
       'Money',
@@ -48,12 +54,23 @@ void main() {
     await t.pumpAndSettle();
     await t.ensureVisible(find.text(label));
     await t.pumpAndSettle();
-    await t.tap(find.text(label));
+    if (label.startsWith('تأكيد وحفظ')) {
+      await t.runAsync(() async {
+        await t.tap(find.text(label));
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      });
+    } else {
+      await t.tap(find.text(label));
+    }
     await t.pumpAndSettle();
   }
 
-  Future<void> enter(WidgetTester t, String label, String value) =>
-      t.enterText(find.widgetWithText(TextFormField, label), value);
+  Future<void> enter(WidgetTester t, String label, String value) => t.enterText(
+    label == 'المبلغ — شيكل'
+        ? find.byKey(const Key('transaction-amount'))
+        : find.widgetWithText(TextFormField, label),
+    value,
+  );
   testWidgets('customer credit and secondary contact save with explicit sign', (
     t,
   ) async {
@@ -107,7 +124,6 @@ void main() {
       );
       await t.pumpAndSettle();
       await enter(t, 'المبلغ — شيكل', '100');
-      await tap(t, 'نقداً');
       await tap(t, 'تحويل بنكي');
       await tap(t, 'الحوالة لم تصل بعد');
       expect(find.text('الرصيد يبقى كما هو حتى وصول الحوالة'), findsOneWidget);
@@ -118,7 +134,7 @@ void main() {
         ),
       );
       expect(share.value, isFalse);
-      await tap(t, 'حفظ الحركة');
+      await tap(t, 'تأكيد وحفظ الدفعة في دفتر دين ✓');
       expect(sent!['pendingConfirmation'], isTrue);
       expect(sent!['method'], 'Bank');
       expect(sent!['reference'], '');
@@ -144,12 +160,14 @@ void main() {
       await t.pumpWidget(wrap(s, TransactionScreen(party: party())));
       await t.pumpAndSettle();
       await enter(t, 'المبلغ — شيكل', '100');
+      await tap(t, 'خصم أو دفعة مع المشتريات (اختياري)');
       await enter(t, 'الخصم — شيكل', '10');
       await enter(t, 'المدفوع الآن — شيكل', '90');
       await t.pumpAndSettle();
+      await tap(t, 'حاسبة الفكّة السريعة (تسجيل الباقي رصيد)');
       await enter(t, 'المبلغ المسلّم نقداً (اختياري)', '100');
       await tap(t, 'احتساب الباقي رصيداً للزبون');
-      await tap(t, 'حفظ الحركة');
+      await tap(t, 'تأكيد وحفظ المشتريات في دفتر دين ✓');
       expect(sent!['amount'], 100);
       expect(sent!['discount'], 10);
       expect(sent!['paidNow'], 100);
@@ -180,7 +198,8 @@ void main() {
       ),
     );
     await t.pumpAndSettle();
-    await tap(t, 'ترتيب حسب: الأعلى رصيداً');
+    await t.tap(find.byTooltip('ترتيب حسب'));
+    await t.pumpAndSettle();
     expect(find.text('الأقل رصيداً'), findsOneWidget);
     await tap(t, 'آخر حركة');
     expect(lastSort, 'recent');
@@ -241,7 +260,7 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('من الأصناف'), findsNothing);
     await enter(t, 'المبلغ — شيكل', '10');
-    await tap(t, 'حفظ الحركة');
+    await tap(t, 'تأكيد وحفظ المشتريات في دفتر دين ✓');
     for (final key in [
       'discount',
       'items',

@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -10,7 +9,6 @@ import 'package:deenbook/core/session.dart';
 import 'package:deenbook/features/catalog.dart';
 import 'package:deenbook/features/profile.dart';
 import 'package:deenbook/features/reports.dart';
-import 'package:deenbook/features/transaction.dart';
 import 'package:deenbook/services/export.dart';
 import 'package:deenbook/ui/theme.dart';
 import 'support/fakes.dart';
@@ -18,9 +16,15 @@ import 'support/fakes.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
+    await (FontLoader(
+      'Symbols',
+    )..addFont(rootBundle.load('assets/fonts/Symbols.ttf'))).load();
     final loader = FontLoader('Cairo')
       ..addFont(rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
-      ..addFont(rootBundle.load('assets/fonts/Cairo-Bold.ttf'));
+      ..addFont(rootBundle.load('assets/fonts/Cairo-SemiBold.ttf'))
+      ..addFont(rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
+      ..addFont(rootBundle.load('assets/fonts/Cairo-ExtraBold.ttf'))
+      ..addFont(rootBundle.load('assets/fonts/Cairo-Black.ttf'));
     await loader.load();
     await (FontLoader(
       'MaterialIcons',
@@ -57,7 +61,7 @@ void main() {
       find.byType(Scaffold).first,
       matchesGoldenFile('goldens/login.png'),
     );
-    await t.tap(find.text('تسجيل الدخول'));
+    await t.tap(find.text('تسجيل الدخول إلى دفتر دين'));
     await t.pumpAndSettle();
     expect(
       find.text('أدخل رقم جوال صحيحاً يبدأ بـ 059 أو 056'),
@@ -76,15 +80,9 @@ void main() {
       expect(find.text('لا توجد حركات بعد'), findsOneWidget);
       expect(find.text('أحمد محمود'), findsNothing);
       expect(t.takeException(), isNull);
-      if (width == 390) {
-
-      }
       await t.tap(find.text('الموردون'));
       await t.pumpAndSettle();
-      expect(
-        find.text('أضف المورد، ثم سجّل مشترياته ومدفوعاته.'),
-        findsOneWidget,
-      );
+      expect(find.text('ابدأ بإضافة مورد جديد.'), findsOneWidget);
       expect(t.takeException(), isNull);
     });
   }
@@ -93,7 +91,7 @@ void main() {
     final s = (await t.runAsync(() => fakeSession(populated: true)))!;
     await t.pumpWidget(DeenBookApp(session: s));
     await t.pumpAndSettle();
-    expect(find.text('650.00 ₪'), findsOneWidget);
+    expect(find.text('650 ₪'), findsOneWidget);
 
     expect(t.takeException(), isNull);
   });
@@ -104,8 +102,8 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('جدّد اشتراكك للمتابعة'), findsOneWidget);
     expect(find.text('الرئيسية'), findsNothing);
-    expect(find.text('60.00 ₪'), findsOneWidget);
-    expect(find.text('150.00 ₪'), findsOneWidget);
+    expect(find.text('60 ₪'), findsOneWidget);
+    expect(find.text('150 ₪'), findsOneWidget);
     expect(t.takeException(), isNull);
   });
   for (final screen in <String, Widget>{

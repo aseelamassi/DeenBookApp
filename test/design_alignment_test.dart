@@ -12,16 +12,22 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUpAll(() async {
+    await (FontLoader(
+      'Symbols',
+    )..addFont(rootBundle.load('assets/fonts/Symbols.ttf'))).load();
     await (FontLoader('Cairo')
           ..addFont(rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
-          ..addFont(rootBundle.load('assets/fonts/Cairo-Bold.ttf')))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-SemiBold.ttf'))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-ExtraBold.ttf'))
+          ..addFont(rootBundle.load('assets/fonts/Cairo-Black.ttf')))
         .load();
-    await (FontLoader('Money')
-          ..addFont(rootBundle.load('assets/fonts/Money.ttf')))
-        .load();
-    await (FontLoader('MaterialIcons')
-          ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf')))
-        .load();
+    await (FontLoader(
+      'Money',
+    )..addFont(rootBundle.load('assets/fonts/Money.ttf'))).load();
+    await (FontLoader(
+      'MaterialIcons',
+    )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
   });
 
   Widget wrap(Session s, Widget child) => Scope(
@@ -35,28 +41,36 @@ void main() {
     ),
   );
 
-  testWidgets('supplier has invoice and payment but no statement', (t) async {
+  testWidgets('supplier exposes statement beside invoice and payment', (
+    t,
+  ) async {
     t.view.physicalSize = const Size(390, 844);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.resetPhysicalSize);
     addTearDown(t.view.resetDevicePixelRatio);
     final calls = <String>[];
-    final session = (await t.runAsync(() => fakeSession(
-      populated: true,
-      override: (r) {
-        calls.add(r.path);
-        return null;
-      },
-    )))!;
+    final session = (await t.runAsync(
+      () => fakeSession(
+        populated: true,
+        override: (r) {
+          calls.add(r.path);
+          return null;
+        },
+      ),
+    ))!;
 
-    await t.pumpWidget(wrap(session, const Scaffold(
-      body: SafeArea(child: CatalogScreen(mode: 'suppliers')),
-    )));
+    await t.pumpWidget(
+      wrap(
+        session,
+        const Scaffold(
+          body: SafeArea(child: CatalogScreen(mode: 'suppliers')),
+        ),
+      ),
+    );
     await t.pumpAndSettle();
     expect(find.text('فاتورة'), findsOneWidget);
-    expect(find.text('دفعة'), findsOneWidget);
-    expect(find.text('كشف الحساب'), findsNothing);
-
+    expect(find.text('سداد'), findsOneWidget);
+    expect(find.text('كشف المورد'), findsOneWidget);
     await t.ensureVisible(find.text('شركة النور للتوريد'));
     await t.tap(find.text('شركة النور للتوريد'));
     await t.pumpAndSettle();
@@ -69,19 +83,27 @@ void main() {
     expect(t.takeException(), isNull);
   });
 
-  testWidgets('supplier payment does not show customer receipt prompt', (t) async {
+  testWidgets('supplier payment does not show customer receipt prompt', (
+    t,
+  ) async {
     t.view.physicalSize = const Size(390, 844);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.resetPhysicalSize);
     addTearDown(t.view.resetDevicePixelRatio);
     final session = (await t.runAsync(() => fakeSession()))!;
-    await t.pumpWidget(wrap(
-      session,
-      TransactionScreen(kind: 'Payment', party: party(supplier: true), supplier: true),
-    ));
+    await t.pumpWidget(
+      wrap(
+        session,
+        TransactionScreen(
+          kind: 'Payment',
+          party: party(supplier: true),
+          supplier: true,
+        ),
+      ),
+    );
     await t.pumpAndSettle();
     expect(find.text('فتح مسودة إيصال عبر واتساب بعد الحفظ'), findsNothing);
-    expect(find.text('دفعة للمورد'), findsOneWidget);
+    expect(find.text('سداد دفعة لمورد'), findsOneWidget);
     expect(t.takeException(), isNull);
   });
 }

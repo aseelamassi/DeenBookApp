@@ -1,6 +1,8 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import '../core/api.dart';
 import '../core/format.dart';
 import '../core/ledger.dart';
@@ -8,6 +10,7 @@ import '../services/receipts.dart';
 import '../core/session.dart';
 import '../services/export.dart';
 import '../ui/theme.dart';
+import '../ui/design.dart';
 import '../ui/widgets.dart';
 import 'transaction.dart';
 
@@ -25,15 +28,17 @@ class _CatalogScreenState extends State<CatalogScreen> {
   List<Json> rows = [];
   Json? overview;
   int page = 0, total = 0, request = 0;
-  bool busy = true;
+  bool busy = true, editProducts = false, showPriceNotice = true;
   String? error, filter, category;
   String sort = 'balance';
-  String get sortLabel => const {
-    'balance': 'الأعلى رصيداً',
-    'balanceAsc': 'الأقل رصيداً',
-    'recent': 'آخر حركة',
-    'name': 'الاسم',
-  }[sort] ?? 'الأعلى رصيداً';
+  String get sortLabel =>
+      const {
+        'balance': 'الأعلى رصيداً',
+        'balanceAsc': 'الأقل رصيداً',
+        'recent': 'آخر حركة',
+        'name': 'الاسم',
+      }[sort] ??
+      'الأعلى رصيداً';
   bool get supplier => widget.mode == 'suppliers';
   bool get products => widget.mode == 'products';
   bool get modern => Scope.of(context).ledgerV2;
@@ -131,118 +136,368 @@ class _CatalogScreenState extends State<CatalogScreen> {
       products
           ? ProductForm(existing: p)
           : supplier
-              ? SupplierDetail(id: p['id'])
-              : PartyDetail(id: p['id']),
+          ? SupplierDetail(id: p['id'])
+          : PartyDetail(id: p['id']),
     );
     if (mounted) load();
   }
 
-  Widget accountCard(Json p) => Surface(
+  Widget accountCard(Json p) {
+    final value = (p['balance'] as num? ?? 0);
+    final credit = value < 0;
+    final status = value == 0
+        ? 'خالص ✓'
+        : credit
+        ? 'له رصيد'
+        : supplier
+        ? 'لهم مستحقات'
+        : 'عليه دين';
+    return Surface(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: () => details(p),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${p['name']}${'${p['nickname'] ?? ''}'.isNotEmpty ? ' (${p['nickname']})' : ''}',
+                        style: appText(14, weight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 4),
+                      if (!supplier)
+                        SoftTag(
+                          status,
+                          color: credit ? green : orange,
+                          background: credit
+                              ? const Color(0xFFECFDF5)
+                              : paleOrange,
+                        ),
+                      if ('${p['phone'] ?? ''}'.isNotEmpty)
+                        Text(
+                          '• ${p['phone']}',
+                          style: appText(
+                            11,
+                            color: secondaryText,
+                            weight: FontWeight.w600,
+                          ),
+                        ),
+                      if ('${p[supplier ? 'category' : 'paymentSchedule'] ?? ''}'
+                          .isNotEmpty)
+                        Text(
+                          '${p[supplier ? 'category' : 'paymentSchedule']}',
+                          style: appText(11, color: secondaryText),
+                        ),
+                      if ('${p['lastNote'] ?? ''}'.isNotEmpty)
+                        Text(
+                          '${p['lastNote']}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: appText(10, color: muted),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF7F8FB),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: lineColor),
+                  ),
+                  child: Column(
+                    children: [
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 90),
+                        child: FittedBox(
+                          child: amount(
+                            value.abs(),
+                            size: 16,
+                            color: credit ? green : orange,
+                          ),
+                        ),
+                      ),
+                      Text(status, style: appText(10, color: muted)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (!widget.picker) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: DesignButton(
+                    supplier
+                        ? 'فاتورة'
+                        : credit
+                        ? 'سحب من الرصيد'
+                        : 'تسجيل دين',
+                    icon: Icons.add,
+                    height: 32,
+                    background: paleOrange,
+                    foreground: orange,
+                    onTap: () => transact(supplier ? 'Purchase' : 'Debt', p),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: DesignButton(
+                    supplier
+                        ? 'سداد'
+                        : credit
+                        ? 'زيادة الرصيد'
+                        : 'قبض دفعة',
+                    icon: Icons.check,
+                    height: 32,
+                    onTap: () => transact('Payment', p),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: DesignButton(
+                    supplier ? 'كشف المورد' : 'كشف الحساب',
+                    height: 32,
+                    background: const Color(0xFFF1F5F9),
+                    foreground: secondaryText,
+                    onTap: () async {
+                      await open(context, PartyDetail(id: p['id']));
+                      if (mounted) load();
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget header() => BrandCard(
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        InkWell(
-          onTap: () => details(p),
-          borderRadius: BorderRadius.circular(12),
-          child: Row(
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                supplier
+                    ? 'ذمم الموردين وفواتير البضائع'
+                    : 'حسابات الزبائن والديون',
+                style: appText(
+                  16,
+                  weight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (!widget.picker)
+              DesignButton(
+                supplier ? 'مورد' : 'زبون جديد',
+                icon: Icons.add,
+                height: 32,
+                background: orange,
+                foreground: Colors.white,
+                onTap: add,
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: .10),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: Colors.white.withValues(alpha: .15)),
+          ),
+          child: Column(
             children: [
-              CircleAvatar(
-                backgroundColor: canvas,
-                child: Icon(
-                  supplier
-                      ? Icons.local_shipping_outlined
-                      : Icons.person_outline,
-                  color: navy,
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          supplier
+                              ? 'إجمالي المستحقات علينا للموردين'
+                              : 'إجمالي الديون المستحقة لنا',
+                          style: appText(11, color: Colors.white70),
+                        ),
+                        const SizedBox(height: 6),
+                        FittedBox(
+                          child: amount(
+                            overview?['outstanding'] ?? 0,
+                            size: 30,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  if (supplier)
+                    const SoftTag(
+                      'توريد بضائع الجملة',
+                      color: Color(0xFFFED7AA),
+                      background: Color(0xFF444574),
+                    )
+                  else
+                    DesignButton(
+                      'تسجيل بالصوت',
+                      icon: Icons.mic_none,
+                      height: 34,
+                      background: Colors.white.withValues(alpha: .1),
+                      foreground: Colors.white,
+                      onTap: () =>
+                          open(context, const TransactionScreen(voice: true)),
+                    ),
+                ],
+              ),
+              const Divider(color: Colors.white12, height: 22),
+              Row(
+                children: [
+                  for (final stat
+                      in supplier
+                          ? [
+                              ('لهم مستحقات', 'owing', const Color(0xFFFED7AA)),
+                              ('حساب خالص', 'settled', const Color(0xFF6EE7B7)),
+                              ('إجمالي الشركات', 'total', Colors.white),
+                            ]
+                          : [
+                              ('عليهم دين', 'owing', const Color(0xFFFED7AA)),
+                              ('لهم رصيد', 'credit', const Color(0xFF6EE7B7)),
+                              ('حساب خالص', 'settled', Colors.white),
+                            ])
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 9,
+                          horizontal: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: navy.withValues(alpha: .23),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Column(
+                          children: [
+                            Text(
+                              stat.$1,
+                              style: appText(10, color: Colors.white70),
+                            ),
+                            Text(
+                              '${overview?[stat.$2] ?? 0} ${supplier ? 'موردين' : 'زبائن'}',
+                              textAlign: TextAlign.center,
+                              style: appText(
+                                11,
+                                weight: FontWeight.w900,
+                                color: stat.$3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        if (!widget.picker) ...[
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: DesignButton(
+                  supplier ? 'تسجيل فاتورة مورد' : 'تسجيل مشتريات (دين)',
+                  icon: Icons.add,
+                  height: 44,
+                  background: orange,
+                  foreground: Colors.white,
+                  onTap: () => transact(supplier ? 'Purchase' : 'Debt'),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${p['name']}',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    if ('${p['nickname'] ?? ''}'.isNotEmpty)
-                      Text(
-                        '${p['nickname']}',
-                        style: const TextStyle(color: muted, fontSize: 12),
-                      ),
-                    Text(
-                      balanceLabel(p),
-                      style: const TextStyle(color: muted, fontSize: 12),
-                    ),
-                  ],
+                child: DesignButton(
+                  supplier ? 'سداد دفعة لمورد' : 'قبض دفعة / سداد',
+                  icon: Icons.check,
+                  height: 44,
+                  background: Colors.white,
+                  onTap: () => transact('Payment'),
                 ),
               ),
-              compactAmount(((p['balance'] as num?) ?? 0).abs()),
-            ],
-          ),
-        ),
-        if ('${p['phone'] ?? ''}'.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: Text(
-              '${p['phone']}',
-              textDirection: TextDirection.ltr,
-              textAlign: TextAlign.right,
-            ),
-          ),
-        if ('${p['alternatePhone'] ?? ''}'.isNotEmpty)
-          Text(
-            '${p['alternateContact'] ?? 'هاتف إضافي'}: ${p['alternatePhone']}',
-            style: const TextStyle(color: muted, fontSize: 12),
-          ),
-        if (supplier && '${p['category'] ?? ''}'.isNotEmpty)
-          Text(
-            '${p['category']}',
-            style: const TextStyle(color: muted, fontSize: 12),
-          ),
-        if ('${p[supplier ? 'deliveryDays' : 'paymentSchedule'] ?? ''}'
-            .isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              '${supplier ? 'التوريد' : 'اتفاق الدفع'}: ${p[supplier ? 'deliveryDays' : 'paymentSchedule']}',
-              style: const TextStyle(color: navy, fontSize: 12),
-            ),
-          ),
-        if ('${p['lastNote'] ?? ''}'.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              '${p['lastNote']}',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: muted, fontSize: 12),
-            ),
-          ),
-        if (!widget.picker) ...[
-          const Divider(height: 24),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              TextButton.icon(
-                onPressed: () => transact(supplier ? 'Purchase' : 'Debt', p),
-                icon: const Icon(Icons.add, size: 18),
-                label: Text(supplier ? 'فاتورة' : 'دين'),
-              ),
-              TextButton.icon(
-                onPressed: () => transact('Payment', p),
-                icon: const Icon(Icons.payments_outlined, size: 18),
-                label: const Text('دفعة'),
-              ),
-              if (!supplier)
-                TextButton(
-                  onPressed: () => details(p),
-                  child: const Text('كشف الحساب'),
-                ),
             ],
           ),
         ],
       ],
+    ),
+  );
+  Widget productCard(Json p) => Surface(
+    child: InkWell(
+      onTap: () => details(p),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: lavender,
+              border: Border.all(color: const Color(0xFFD5DAF3)),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(
+              Icons.inventory_2_outlined,
+              color: orange,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${p['name']}',
+                  style: appText(14, weight: FontWeight.w900),
+                ),
+                Text(
+                  '${displayMoney(p['salePrice'])} / ${p['unit']}',
+                  style: appText(12, color: navy, weight: FontWeight.w800),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (!widget.picker)
+            DesignButton(
+              editProducts ? 'تعديل' : 'بيع بالدين',
+              icon: editProducts ? Icons.edit_outlined : Icons.add,
+              height: 32,
+              border: true,
+              onTap: () async {
+                await open(
+                  context,
+                  editProducts
+                      ? ProductForm(existing: p)
+                      : TransactionScreen(initialProduct: p),
+                );
+                if (mounted) load();
+              },
+            ),
+        ],
+      ),
     ),
   );
   @override
@@ -252,194 +507,228 @@ class _CatalogScreenState extends State<CatalogScreen> {
       child: Width(
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
           children: [
-            Heading(
-              title,
-              action: FilledButton.icon(
-                onPressed: add,
-                icon: const Icon(Icons.add),
-                label: Text(products ? 'إضافة صنف' :
-                    supplier ? 'إضافة مورد' : 'إضافة زبون'),
-              ),
-            ),
-            Text(
-              products
-                  ? 'أسعار الأصناف ووحداتها في مكان واحد.'
-                  : supplier
-                  ? 'ذمم الموردين وفواتير البضائع'
-                  : 'حسابات الزبائن والديون',
-              style: const TextStyle(color: muted),
-            ),
-            if (supplier)
-              const Text(
-                'أضف المورد، ثم سجّل مشترياته ومدفوعاته.',
-                style: TextStyle(color: muted, fontSize: 12),
-              ),
-            const SizedBox(height: 18),
-            if (!products && overview != null)
-              Surface(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: metric(
-                        supplier
-                            ? 'إجمالي المستحق للموردين'
-                            : 'إجمالي المستحق على الزبائن',
-                        overview!['outstanding'],
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Column(
-                      children: [
-                        Text(
-                          '${overview!['total']}',
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          supplier ? 'مورد' : 'زبون',
-                          style: const TextStyle(color: muted),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            if (!products && !widget.picker) ...[
+            if (!products)
+              header()
+            else
               Row(
                 children: [
-                  Expanded(
-                    child: BusyButton(
-                      label: supplier ? 'فاتورة مشتريات' : 'تسجيل دين',
-                      background: orange,
-                      onPressed: () => transact(supplier ? 'Purchase' : 'Debt'),
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: lavender,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(
+                      Icons.inventory_2_outlined,
+                      color: orange,
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: BusyButton(
-                      label: 'تسجيل دفعة',
-                      onPressed: () => transact('Payment'),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'قائمة الأصناف والأسعار',
+                          style: appText(16, weight: FontWeight.w900),
+                        ),
+                        Text(
+                          'أصناف المحل بالقطعة والوزن',
+                          style: appText(11, color: muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (!widget.picker) ...[
+                    const SizedBox(width: 8),
+                    DesignButton(
+                      'صنف جديد',
+                      icon: Icons.add,
+                      background: orange,
+                      foreground: Colors.white,
+                      onTap: add,
+                    ),
+                    PopupMenuButton<String>(
+                      tooltip: 'خيارات الأصناف',
+                      onSelected: (v) {
+                        if (v == 'add') {
+                          add();
+                        } else {
+                          setState(() => editProducts = !editProducts);
+                        }
+                      },
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(
+                          value: 'add',
+                          child: Text('إضافة صنف جديد'),
+                        ),
+                        PopupMenuItem(
+                          value: 'edit',
+                          child: Text(
+                            editProducts
+                                ? 'إنهاء التعديل'
+                                : 'تعديل الأصناف والأسعار',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: search,
+                    style: appText(12),
+                    decoration: InputDecoration(
+                      hintText: products
+                          ? 'ابحث عن صنف بالاسم أو الوحدة…'
+                          : supplier
+                          ? 'ابحث باسم المورد أو صنف البضاعة…'
+                          : 'ابحث بالاسم أو اللقب أو الهاتف…',
+                      prefixIcon: const Icon(
+                        Icons.search,
+                        size: 18,
+                        color: muted,
+                      ),
+                      prefixIconConstraints: const BoxConstraints(minWidth: 34),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 12,
+                        horizontal: 10,
+                      ),
+                    ),
+                    onChanged: (_) {
+                      debounce?.cancel();
+                      debounce = Timer(
+                        const Duration(milliseconds: 350),
+                        () => load(),
+                      );
+                    },
+                  ),
+                ),
+                if (!products) ...[
+                  const SizedBox(width: 8),
+                  PopupMenuButton<String>(
+                    tooltip: 'ترتيب حسب',
+                    initialValue: sort,
+                    onSelected: (v) {
+                      setState(() => sort = v);
+                      load();
+                    },
+                    itemBuilder: (_) =>
+                        {
+                              'balance': 'الأعلى رصيداً',
+                              if (modern) 'balanceAsc': 'الأقل رصيداً',
+                              if (modern) 'recent': 'آخر حركة',
+                              'name': 'الاسم',
+                            }.entries
+                            .map(
+                              (e) => PopupMenuItem(
+                                value: e.key,
+                                child: Text(e.value),
+                              ),
+                            )
+                            .toList(),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0xFFD5DAF3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.swap_vert, size: 14),
+                          Text(
+                            sort == 'balance'
+                                ? (supplier ? 'الأعلى مستحقات' : 'الأعلى ديناً')
+                                : sortLabel,
+                            style: appText(10, weight: FontWeight.w800),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 16),
-            ],
-            TextField(
-              controller: search,
-              decoration: InputDecoration(
-                hintText: 'بحث في $title',
-                prefixIcon: const Icon(Icons.search),
-              ),
-              onChanged: (_) {
-                debounce?.cancel();
-                debounce = Timer(
-                  const Duration(milliseconds: 350),
-                  () => load(),
-                );
-              },
+              ],
             ),
-            const SizedBox(height: 12),
-            if (!products) ...[
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (final e in <String?, String>{
-                      null: 'الكل',
-                      supplier ? 'owing' : 'debt': 'مستحقات',
-                      'credit': 'رصيد دائن',
-                      'scheduled': supplier ? 'توريد مجدول' : 'اتفاق دفع',
-                      'settled': 'مسدّد',
-                    }.entries)
-                      Padding(
-                        padding: const EdgeInsetsDirectional.only(end: 6),
-                        child: ChoiceChip(
-                          label: Text(
-                            '${e.value}${overview == null ? '' : ' (${overview![e.key == null
-                                          ? 'total'
-                                          : e.key == 'debt'
-                                          ? 'owing'
-                                          : e.key] ?? 0})'}',
-                          ),
-                          selected: filter == e.key,
-                          onSelected: (_) {
-                            setState(() => filter = e.key);
-                            load();
-                          },
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+            if (!products && !supplier) ...[
               const SizedBox(height: 12),
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: PopupMenuButton<String>(
-                  tooltip: 'ترتيب حسب',
-                  initialValue: sort,
-                  onSelected: (value) {
-                    setState(() => sort = value);
-                    load();
-                  },
-                  itemBuilder: (context) => {
-                    'balance': 'الأعلى رصيداً',
-                    if (modern) 'balanceAsc': 'الأقل رصيداً',
-                    if (modern) 'recent': 'آخر حركة',
-                    'name': 'الاسم',
-                  }.entries.map((e) => PopupMenuItem<String>(
-                    value: e.key, child: Text(e.value))).toList(),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.sort_rounded, size: 20),
-                      const SizedBox(width: 6),
-                      Text('ترتيب حسب: $sortLabel'),
-                      const Icon(Icons.keyboard_arrow_down),
-                    ]),
-                  ),
-                ),
+              DesignChips<String?>(
+                items: {
+                  null: 'الكل ${overview?['total'] ?? 0}',
+                  'debt': 'عليهم دين ${overview?['owing'] ?? 0}',
+                  'credit': 'لهم رصيد ${overview?['credit'] ?? 0}',
+                  'scheduled': 'بموعد محدد ${overview?['scheduled'] ?? 0}',
+                  'settled': 'خالص ✓ ${overview?['settled'] ?? 0}',
+                },
+                selected: filter,
+                onSelected: (v) {
+                  setState(() => filter = v);
+                  load();
+                },
               ),
             ],
-            if ((supplier || products) &&
-                (overview?['categories'] as List? ?? []).isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
+            if (products) ...[
+              const SizedBox(height: 12),
+              DesignChips<String?>(
+                items: {
+                  null: 'الكل',
+                  for (final c in (overview?['categories'] as List? ?? []))
+                    '$c': '$c',
+                },
+                selected: category,
+                onSelected: (v) {
+                  setState(() => category = v);
+                  load();
+                },
+              ),
+              if (showPriceNotice && !widget.picker) ...[
+                const SizedBox(height: 14),
+                Surface(
+                  color: lavender,
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Padding(
-                        padding: const EdgeInsetsDirectional.only(end: 6),
-                        child: ChoiceChip(
-                          label: const Text('كل الأنواع'),
-                          selected: category == null,
-                          onSelected: (_) {
-                            category = null;
-                            load();
-                          },
+                      const Icon(
+                        Icons.shield_outlined,
+                        size: 19,
+                        color: secondaryText,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'قاعدة الأمان المالي وثبات القيود في دفتر دين:',
+                              style: appText(11, weight: FontWeight.w800),
+                            ),
+                            Text(
+                              'تعديل أسعار الأصناف أو حذفها لا يؤثر على المشتريات القائمة، ولا يغيّر أي فاتورة قديمة.',
+                              style: appText(11, color: secondaryText),
+                            ),
+                          ],
                         ),
                       ),
-                      for (final c in overview!['categories'])
-                        Padding(
-                          padding: const EdgeInsetsDirectional.only(end: 6),
-                          child: ChoiceChip(
-                            label: Text('$c'),
-                            selected: category == c,
-                            onSelected: (_) {
-                              category = c;
-                              load();
-                            },
-                          ),
-                        ),
+                      IconButton(
+                        tooltip: 'إخفاء التوضيح',
+                        onPressed: () =>
+                            setState(() => showPriceNotice = false),
+                        icon: const Icon(Icons.close, size: 16, color: muted),
+                        visualDensity: VisualDensity.compact,
+                      ),
                     ],
                   ),
                 ),
-              ),
+              ],
+            ],
             const SizedBox(height: 14),
             if (error != null)
               Empty(
@@ -465,19 +754,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
                   child: const Text('إضافة الآن'),
                 ),
               ),
-            ...rows.map(
-              (p) => products
-                  ? Card(
-                      elevation: 0,
-                      child: ListTile(
-                        title: Text('${p['name']}'),
-                        subtitle: Text('${p['unit']} · ${p['category']}'),
-                        trailing: compactAmount(p['salePrice']),
-                        onTap: () => details(p),
-                      ),
-                    )
-                  : accountCard(p),
-            ),
+            ...rows.map((p) => products ? productCard(p) : accountCard(p)),
             if (busy)
               const Padding(
                 padding: EdgeInsets.all(24),
@@ -488,7 +765,6 @@ class _CatalogScreenState extends State<CatalogScreen> {
                 onPressed: () => load(more: true),
                 child: Text('عرض المزيد (${rows.length} / $total)'),
               ),
-            const SizedBox(height: 30),
           ],
         ),
       ),
@@ -510,7 +786,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
   }
 }
 
-class PartyForm extends StatefulWidget {
+class PartyForm extends ModalForm {
   const PartyForm({super.key, required this.supplier, this.existing});
   final bool supplier;
   final Json? existing;
@@ -598,15 +874,12 @@ class _PartyFormState extends State<PartyForm> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text(
+  Widget build(BuildContext context) => FormSheetScaffold(
+    title:
         '${widget.existing == null ? 'إضافة' : 'تعديل'} ${widget.supplier ? 'مورد' : 'زبون'}',
-      ),
-    ),
     body: Width(
       child: ListView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         children: [
           Form(
             key: form,
@@ -625,16 +898,29 @@ class _PartyFormState extends State<PartyForm> {
                       ? 'أدخل اسماً من حرفين على الأقل'
                       : null,
                 ),
-                field(
-                  fields['phone']!,
-                  'رقم الجوال (اختياري)',
-                  max: 30,
-                  keyboard: TextInputType.phone,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: field(
+                        fields[widget.supplier ? 'category' : 'nickname']!,
+                        widget.supplier
+                            ? 'نوع التوريد (اختياري)'
+                            : 'اللقب (اختياري)',
+                        max: widget.supplier ? 50 : 80,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: field(
+                        fields['phone']!,
+                        'رقم الجوال (اختياري)',
+                        max: 30,
+                        keyboard: TextInputType.phone,
+                      ),
+                    ),
+                  ],
                 ),
-                if (widget.supplier)
-                  field(fields['category']!, 'نوع التوريد (اختياري)', max: 50)
-                else
-                  field(fields['nickname']!, 'اللقب (اختياري)', max: 80),
                 if (modern && !widget.supplier) ...[
                   field(
                     fields['alternatePhone']!,
@@ -755,8 +1041,7 @@ class _SupplierDetailState extends State<SupplierDetail> {
     future ??= load();
   }
 
-  Future<Json> load() =>
-      Scope.of(context).api.get('/api/parties/${widget.id}');
+  Future<Json> load() => Scope.of(context).api.get('/api/parties/${widget.id}');
 
   void refresh() => setState(() => future = load());
 
@@ -1138,7 +1423,7 @@ class _PartyDetailState extends State<PartyDetail> {
   );
 }
 
-class ProductForm extends StatefulWidget {
+class ProductForm extends ModalForm {
   const ProductForm({super.key, this.existing});
   final Json? existing;
   @override
@@ -1206,10 +1491,8 @@ class _ProductFormState extends State<ProductForm> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text(widget.existing == null ? 'إضافة صنف' : 'تعديل الصنف'),
-    ),
+  Widget build(BuildContext context) => FormSheetScaffold(
+    title: widget.existing == null ? 'إضافة صنف جديد' : 'تعديل الصنف',
     body: Width(
       child: ListView(
         padding: const EdgeInsets.all(20),
@@ -1220,54 +1503,69 @@ class _ProductFormState extends State<ProductForm> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 field(fields['name']!, 'اسم الصنف', required: true),
+                field(
+                  fields['salePrice']!,
+                  'سعر البيع — شيكل',
+                  keyboard: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  validator: (v) =>
+                      cents(v ?? '') == null ? 'أدخل سعراً صحيحاً' : null,
+                ),
+                Text('وحدة البيع', style: appText(12, weight: FontWeight.w800)),
+                const SizedBox(height: 8),
                 Wrap(
                   spacing: 6,
+                  runSpacing: 6,
                   children: [
                     for (final unit in ['قطعة', 'كغم', 'ربطة', 'كرتونة', 'لتر'])
-                      ActionChip(
-                        label: Text(unit),
-                        onPressed: () => fields['unit']!.text = unit,
+                      DesignButton(
+                        unit,
+                        height: 34,
+                        background: fields['unit']!.text == unit
+                            ? navy
+                            : canvas,
+                        foreground: fields['unit']!.text == unit
+                            ? Colors.white
+                            : navy,
+                        onTap: () =>
+                            setState(() => fields['unit']!.text = unit),
                       ),
                   ],
                 ),
-                field(fields['unit']!, 'الوحدة', required: true, max: 30),
-                Wrap(
-                  spacing: 6,
+                const SizedBox(height: 16),
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  maintainState: true,
+                  title: Text(
+                    'تفاصيل إضافية (اختياري)',
+                    style: appText(12, weight: FontWeight.w800),
+                  ),
                   children: [
-                    for (final category in [
-                      'عام',
-                      'مواد تموينية',
-                      'خضار وفواكه',
-                      'مخبوزات',
-                      'منظفات',
-                    ])
-                      ActionChip(
-                        label: Text(category),
-                        onPressed: () => fields['category']!.text = category,
+                    field(fields['unit']!, 'الوحدة', required: true, max: 30),
+                    field(
+                      fields['category']!,
+                      'التصنيف',
+                      required: true,
+                      max: 60,
+                    ),
+                    field(
+                      fields['purchasePrice']!,
+                      'سعر الشراء — شيكل',
+                      keyboard: const TextInputType.numberWithOptions(
+                        decimal: true,
                       ),
+                      validator: (v) =>
+                          cents(v ?? '') == null ? 'أدخل سعراً صحيحاً' : null,
+                    ),
                   ],
                 ),
-                field(fields['category']!, 'التصنيف', required: true, max: 60),
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 16),
-                  child: Text(
-                    'تعديل الأسعار يخص الفواتير الجديدة. الفواتير المحفوظة تحتفظ بأسعارها.',
-                    style: TextStyle(color: muted, fontSize: 12),
-                  ),
+                const SizedBox(height: 12),
+                Text(
+                  'تعديل الأسعار يخص الفواتير الجديدة. الفواتير المحفوظة تحتفظ بأسعارها.',
+                  style: appText(11, color: muted),
                 ),
-                for (final e in {
-                  'salePrice': 'سعر البيع',
-                  'purchasePrice': 'سعر الشراء',
-                }.entries)
-                  field(
-                    fields[e.key]!,
-                    '${e.value} — شيكل',
-                    keyboard: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    validator: (v) =>
-                        cents(v ?? '') == null ? 'أدخل سعراً صحيحاً' : null,
-                  ),
+                const SizedBox(height: 20),
                 if (error != null)
                   Text(error!, style: const TextStyle(color: Colors.red)),
                 BusyButton(label: 'حفظ الصنف', onPressed: save, busy: busy),

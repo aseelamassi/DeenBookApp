@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:uuid/uuid.dart';
+
 import '../core/api.dart';
 import '../core/format.dart';
 import '../core/ledger.dart';
@@ -9,6 +10,7 @@ import 'invoice_items.dart';
 import '../core/session.dart';
 import '../core/storage.dart';
 import '../ui/theme.dart';
+import '../ui/design.dart';
 import '../ui/widgets.dart';
 import 'catalog.dart';
 import 'reports.dart';
@@ -17,6 +19,7 @@ Future<void> quickAction(BuildContext context) async {
   final result = await showModalBottomSheet<String>(
     context: context,
     showDragHandle: true,
+    isScrollControlled: true,
     builder: (c) => SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
@@ -24,31 +27,66 @@ Future<void> quickAction(BuildContext context) async {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Heading('ماذا تريد أن تسجّل؟'),
-            ...{
-              'Debt': 'دين على زبون',
-              'Purchase': 'مشتريات من مورد',
-              'Payment': 'دفعة',
-              'Return': 'مرتجع',
-            }.entries.map(
-              (e) => ListTile(
-                title: Text(e.value),
-                leading: Icon(
-                  e.key == 'Payment'
-                      ? Icons.payments_outlined
-                      : Icons.receipt_long_outlined,
-                ),
-                trailing: const Icon(Icons.chevron_left),
-                onTap: () => Navigator.pop(c, e.key),
+            Heading(
+              '⚡ إجراء سريع في دفتر دين',
+              action: IconButton(
+                tooltip: 'إغلاق',
+                onPressed: () => Navigator.pop(c),
+                icon: const Icon(Icons.close),
               ),
             ),
+            for (final row in [
+              [('Debt', 'تسجيل دين زبون'), ('Payment', 'قبض دفعة زبون')],
+              [
+                ('Purchase', 'تسجيل فاتورة مورد'),
+                ('SupplierPayment', 'سداد دفعة لمورد'),
+              ],
+              [('Customer', 'زبون جديد'), ('Product', 'صنف جديد')],
+            ])
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  children: [
+                    for (var i = 0; i < row.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 10),
+                      Expanded(
+                        child: DesignButton(
+                          row[i].$2,
+                          icon: row[i].$1.contains('Payment')
+                              ? Icons.check
+                              : Icons.add,
+                          background:
+                              row[i].$1 == 'Debt' || row[i].$1 == 'Purchase'
+                              ? paleOrange
+                              : lavender,
+                          foreground:
+                              row[i].$1 == 'Debt' || row[i].$1 == 'Purchase'
+                              ? orange
+                              : navy,
+                          onTap: () => Navigator.pop(c, row[i].$1),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
           ],
         ),
       ),
     ),
   );
   if (result != null && context.mounted) {
-    await open(context, TransactionScreen(kind: result));
+    await open(
+      context,
+      result == 'Customer'
+          ? const PartyForm(supplier: false)
+          : result == 'Product'
+          ? const ProductForm()
+          : TransactionScreen(
+              kind: result == 'SupplierPayment' ? 'Payment' : result,
+              supplier: result == 'SupplierPayment' || result == 'Purchase',
+            ),
+    );
   }
 }
 
@@ -57,11 +95,12 @@ class TransactionScreen extends StatefulWidget {
     super.key,
     this.kind = 'Debt',
     this.party,
+    this.initialProduct,
     this.voice = false,
     this.supplier = false,
   });
   final String kind;
-  final Json? party;
+  final Json? party, initialProduct;
   final bool voice, supplier;
   @override
   State<TransactionScreen> createState() => _TransactionScreenState();
@@ -155,6 +194,14 @@ class _TransactionScreenState extends State<TransactionScreen> {
     } catch (e) {
       error = '$e';
     } finally {
+      if (pending == null &&
+          widget.initialProduct != null &&
+          mounted &&
+          modern) {
+        itemMode = true;
+        lines.add(InvoiceLine.product(widget.initialProduct!, supplier));
+        itemsChanged();
+      }
       if (mounted) setState(() => restoring = false);
     }
   }
@@ -296,7 +343,12 @@ class _TransactionScreenState extends State<TransactionScreen> {
       final queued = saved is Map && saved['queued'] == true;
       await draft.clear();
       await session.updatePending();
-      if (!queued && receipt && !supplier && kind == 'Payment' && mounted && saved is Map) {
+      if (!queued &&
+          receipt &&
+          !supplier &&
+          kind == 'Payment' &&
+          mounted &&
+          saved is Map) {
         try {
           await Receipts.payment(
             context,
@@ -314,9 +366,12 @@ class _TransactionScreenState extends State<TransactionScreen> {
         }
       }
       if (mounted) {
-        message(context, queued
-            ? 'تم حفظ الحركة على الجهاز. ستُرسل عند عودة الإنترنت، ولا يظهر أثرها في رصيد الخادم بعد.'
-            : 'تمت مزامنة الحركة وحفظها على الخادم');
+        message(
+          context,
+          queued
+              ? 'تم حفظ الحركة على الجهاز. ستُرسل عند عودة الإنترنت، ولا يظهر أثرها في رصيد الخادم بعد.'
+              : 'تمت مزامنة الحركة وحفظها على الخادم',
+        );
         Navigator.pop(context, true);
       }
     } catch (e) {
@@ -354,25 +409,66 @@ class _TransactionScreenState extends State<TransactionScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: Text(
-        '${kinds[kind]}${kind == 'Payment' ? (supplier ? ' للمورد' : ' من الزبون') : ''}',
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            kind == 'Payment'
+                ? (supplier ? 'سداد دفعة لمورد' : 'قبض دفعة / سداد')
+                : kind == 'Return'
+                ? 'مرتجع'
+                : supplier
+                ? 'تسجيل فاتورة مورد'
+                : 'تسجيل مشتريات (دين)',
+            style: appText(16, weight: FontWeight.w900),
+          ),
+          Text(
+            '${party?['name'] ?? 'دفتر دين'} · حفظ ومزامنة البيانات',
+            style: appText(10, color: muted),
+          ),
+        ],
+      ),
+    ),
+    bottomNavigationBar: Material(
+      color: Colors.white,
+      child: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            14,
+            10,
+            14,
+            10 + MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: BusyButton(
+            label: pending != null
+                ? 'إعادة محاولة حفظ نفس الحركة'
+                : kind == 'Payment'
+                ? 'تأكيد وحفظ الدفعة في دفتر دين ✓'
+                : kind == 'Return'
+                ? 'تأكيد وحفظ المرتجع ✓'
+                : 'تأكيد وحفظ المشتريات في دفتر دين ✓',
+            background: kind == 'Payment' ? navy : orange,
+            busy: busy,
+            onPressed: restoring ? null : save,
+          ),
+        ),
       ),
     ),
     body: restoring
         ? const Center(child: CircularProgressIndicator())
         : Width(
             child: ListView(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
               children: [
                 if (pending != null)
                   Surface(
-                    color: const Color(0xFFFFF3E8),
+                    color: paleOrange,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'لديك حركة بانتظار التأكد من حفظها',
-                          style: TextStyle(fontWeight: FontWeight.bold),
+                          style: appText(14, weight: FontWeight.w800),
                         ),
                         const Text(
                           'إعادة المحاولة تستخدم نفس الحركة المحفوظة لمنع تكرارها.',
@@ -406,65 +502,85 @@ class _TransactionScreenState extends State<TransactionScreen> {
                     children: [
                       if (widget.party == null && !isInvoice && pending == null)
                         Padding(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          child: SegmentedButton<bool>(
-                            segments: const [
-                              ButtonSegment(value: false, label: Text('زبون')),
-                              ButtonSegment(value: true, label: Text('مورد')),
-                            ],
-                            selected: {supplier},
-                            onSelectionChanged: (v) => setState(() {
-                              supplier = v.first;
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Segments<bool>(
+                            items: const {false: 'زبون', true: 'مورد'},
+                            selected: supplier,
+                            onSelected: (v) => setState(() {
+                              supplier = v;
                               party = null;
                             }),
                           ),
                         ),
                       Surface(
-                        child: ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            party?['name'] ??
-                                'اختر ${supplier ? 'المورد' : 'الزبون'}',
-                          ),
-                          subtitle: Text(
-                            widget.party != null
-                                ? 'تُسجّل الحركة لهذا الحساب'
-                                : party == null
-                                ? 'الحساب المرتبط بالحركة'
-                                : balanceLabel(party!),
-                          ),
-                          leading: const Icon(Icons.person_outline),
-                          trailing: widget.party == null && pending == null
-                              ? const Icon(Icons.chevron_left)
-                              : const Icon(Icons.lock_outline, size: 18),
-                          onTap: widget.party == null && pending == null
-                              ? choose
-                              : null,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    supplier ? 'المورد:' : 'الزبون:',
+                                    style: appText(12, weight: FontWeight.w800),
+                                  ),
+                                ),
+                                if (party != null)
+                                  SoftTag(
+                                    '${balanceLabel(party!)}: ${displayMoney((party!['balance'] as num).abs())}',
+                                    color: orange,
+                                    background: paleOrange,
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Material(
+                              color: const Color(0xFFF7F8FB),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                side: const BorderSide(color: lineColor),
+                              ),
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
+                                title: Text(
+                                  party?['name'] ??
+                                      'اختر ${supplier ? 'المورد' : 'الزبون'}',
+                                  style: appText(13),
+                                ),
+                                trailing: Icon(
+                                  widget.party == null && pending == null
+                                      ? Icons.expand_more
+                                      : Icons.lock_outline,
+                                  size: 18,
+                                ),
+                                onTap: widget.party == null && pending == null
+                                    ? choose
+                                    : null,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       IgnorePointer(
                         ignoring: pending != null || busy,
                         child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             if (modern && isInvoice) ...[
-                              SegmentedButton<bool>(
-                                segments: const [
-                                  ButtonSegment(
-                                    value: false,
-                                    label: Text('مبلغ مباشر'),
-                                  ),
-                                  ButtonSegment(
-                                    value: true,
-                                    label: Text('من الأصناف'),
-                                  ),
-                                ],
-                                selected: {itemMode},
-                                onSelectionChanged: (v) {
-                                  setState(() => itemMode = v.first);
+                              Segments<bool>(
+                                items: const {
+                                  false: 'المسار السريع (مبلغ مباشر)',
+                                  true: 'اختيار أصناف (بالقطعة/الوزن)',
+                                },
+                                selected: itemMode,
+                                onSelected: (v) {
+                                  setState(() => itemMode = v);
                                   if (itemMode) itemsChanged();
                                 },
                               ),
-                              const SizedBox(height: 16),
+                              const SizedBox(height: 12),
                               if (itemMode)
                                 InvoiceItems(
                                   lines: lines,
@@ -472,136 +588,233 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                   onChanged: itemsChanged,
                                 ),
                             ],
-                            field(
-                              total,
-                              'المبلغ — شيكل',
-                              enabled: !itemMode,
-                              keyboard: const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
-                              validator: (v) => (cents(v ?? '') ?? 0) <= 0
-                                  ? 'أدخل مبلغاً أكبر من صفر وبدقتين عشريتين'
-                                  : null,
-                            ),
-                            if (modern)
-                              Wrap(
-                                spacing: 6,
-                                runSpacing: 4,
+                            Surface(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  if (isInvoice && !itemMode)
-                                    for (final n in [5, 10, 20, 50, 100])
-                                      ActionChip(
-                                        label: Text('+$n'),
-                                        onPressed: () => total.text =
-                                            decimalMoney(gross + n * 100),
+                                  Text(
+                                    'المبلغ الإجمالي بالشيكل (₪):',
+                                    style: appText(12, weight: FontWeight.w800),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextFormField(
+                                    key: const Key('transaction-amount'),
+                                    controller: total,
+                                    enabled: !itemMode,
+                                    textAlign: TextAlign.center,
+                                    style: appText(28, weight: FontWeight.w900),
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                          decimal: true,
+                                        ),
+                                    decoration: InputDecoration(
+                                      hintText: '0',
+                                      hintStyle: appText(
+                                        28,
+                                        color: muted,
+                                        weight: FontWeight.w900,
                                       ),
-                                  if (kind == 'Payment') ...[
-                                    ActionChip(
-                                      label: const Text('100 شيكل'),
-                                      onPressed: () => total.text = '100',
+                                      fillColor: const Color(0xFFF7F8FB),
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical: 6,
+                                          ),
                                     ),
-                                    if (amountCents(party?['balance']) > 0)
-                                      ActionChip(
-                                        label: const Text('كامل المستحق'),
-                                        onPressed: () =>
-                                            total.text = decimalMoney(
-                                              amountCents(party?['balance']),
-                                            ),
-                                      ),
+                                    validator: (v) => (cents(v ?? '') ?? 0) <= 0
+                                        ? 'أدخل مبلغاً أكبر من صفر وبدقتين عشريتين'
+                                        : null,
+                                  ),
+                                  if (kind == 'Payment') ...[
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                      spacing: 6,
+                                      children: [
+                                        ActionChip(
+                                          label: const Text('100 شيكل'),
+                                          onPressed: () => total.text = '100',
+                                        ),
+                                        if (amountCents(party?['balance']) > 0)
+                                          ActionChip(
+                                            label: const Text('كامل المستحق'),
+                                            onPressed: () =>
+                                                total.text = decimalMoney(
+                                                  amountCents(
+                                                    party?['balance'],
+                                                  ),
+                                                ),
+                                          ),
+                                      ],
+                                    ),
                                   ],
                                 ],
                               ),
-                            if (modern && isInvoice)
-                              field(
-                                discount,
-                                'الخصم — شيكل',
-                                keyboard: const TextInputType.numberWithOptions(
-                                  decimal: true,
-                                ),
-                                validator: (v) {
-                                  final n = cents(v ?? '');
-                                  return n == null || n >= gross
-                                      ? 'الخصم من صفر إلى أقل من قيمة الفاتورة'
-                                      : null;
-                                },
-                              ),
+                            ),
                             if (isInvoice)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 16),
-                                child: TextFormField(
-                                  controller: paid,
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                        decimal: true,
-                                      ),
-                                  decoration: const InputDecoration(
-                                    labelText: 'المدفوع الآن — شيكل',
+                              Surface(
+                                child: ExpansionTile(
+                                  maintainState: true,
+                                  tilePadding: EdgeInsets.zero,
+                                  title: Text(
+                                    'خصم أو دفعة مع المشتريات (اختياري)',
+                                    style: appText(12, weight: FontWeight.w800),
                                   ),
-                                  onChanged: (_) => setState(() {}),
-                                  validator: (v) {
-                                    final n = cents(v ?? '');
-                                    return n == null ||
-                                            ((supplier || !modern) && n > net)
-                                        ? 'أدخل دفعة صحيحة لا تتجاوز صافي فاتورة المورد'
-                                        : null;
-                                  },
-                                ),
-                              ),
-                            if (hasPayment) ...[
-                              DropdownButtonFormField<String>(
-                                initialValue: methods.containsKey(method)
-                                    ? method
-                                    : 'Cash',
-                                items: methods.entries
-                                    .map(
-                                      (e) => DropdownMenuItem(
-                                        value: e.key,
-                                        child: Text(e.value),
+                                  children: [
+                                    if (modern)
+                                      field(
+                                        discount,
+                                        'الخصم — شيكل',
+                                        keyboard:
+                                            const TextInputType.numberWithOptions(
+                                              decimal: true,
+                                            ),
+                                        validator: (v) {
+                                          final n = cents(v ?? '');
+                                          return n == null || n >= gross
+                                              ? 'الخصم من صفر إلى أقل من قيمة الفاتورة'
+                                              : null;
+                                        },
                                       ),
-                                    )
-                                    .toList(),
-                                onChanged: (v) => setState(() => method = v!),
-                                decoration: const InputDecoration(
-                                  labelText: 'وسيلة الدفع',
+                                    field(
+                                      paid,
+                                      'المدفوع الآن — شيكل',
+                                      keyboard:
+                                          const TextInputType.numberWithOptions(
+                                            decimal: true,
+                                          ),
+                                      validator: (v) {
+                                        final n = cents(v ?? '');
+                                        return n == null ||
+                                                ((supplier || !modern) &&
+                                                    n > net)
+                                            ? 'أدخل دفعة صحيحة لا تتجاوز صافي فاتورة المورد'
+                                            : null;
+                                      },
+                                    ),
+                                    field(
+                                      invoice,
+                                      'رقم الفاتورة (اختياري)',
+                                      max: 100,
+                                    ),
+                                  ],
                                 ),
                               ),
-                              const SizedBox(height: 16),
-                              if (method != 'Cash')
-                                field(
-                                  reference,
-                                  'رقم المرجع',
-                                  required: !modern,
-                                  max: 100,
+                            if (hasPayment)
+                              Surface(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Text(
+                                      'وسيلة الدفع',
+                                      style: appText(
+                                        12,
+                                        weight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Column(
+                                      children: [
+                                        for (var row = 0; row < 2; row++)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              bottom: 8,
+                                            ),
+                                            child: Row(
+                                              children: [
+                                                for (
+                                                  var i = row * 2;
+                                                  i < row * 2 + 2;
+                                                  i++
+                                                ) ...[
+                                                  if (i % 2 == 1)
+                                                    const SizedBox(width: 8),
+                                                  Expanded(
+                                                    child: DesignButton(
+                                                      methods.values.elementAt(
+                                                        i,
+                                                      ),
+                                                      icon: i == 0
+                                                          ? Icons
+                                                                .payments_outlined
+                                                          : i == 3
+                                                          ? Icons
+                                                                .account_balance_outlined
+                                                          : Icons
+                                                                .account_balance_wallet_outlined,
+                                                      background:
+                                                          method ==
+                                                              methods.keys
+                                                                  .elementAt(i)
+                                                          ? navy
+                                                          : canvas,
+                                                      foreground:
+                                                          method ==
+                                                              methods.keys
+                                                                  .elementAt(i)
+                                                          ? Colors.white
+                                                          : navy,
+                                                      onTap: () => setState(
+                                                        () => method = methods
+                                                            .keys
+                                                            .elementAt(i),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                    if (method != 'Cash') ...[
+                                      const SizedBox(height: 12),
+                                      field(
+                                        reference,
+                                        'رقم المرجع',
+                                        required: !modern,
+                                        max: 100,
+                                      ),
+                                    ],
+                                    if (modern &&
+                                        kind == 'Payment' &&
+                                        !supplier &&
+                                        method != 'Cash')
+                                      CheckboxListTile(
+                                        contentPadding: EdgeInsets.zero,
+                                        title: const Text('الحوالة لم تصل بعد'),
+                                        subtitle: const Text(
+                                          'تُحفظ بانتظار التأكيد، ولا تغيّر الرصيد أو المقبوضات.',
+                                        ),
+                                        value: waiting,
+                                        onChanged: (v) =>
+                                            setState(() => waiting = v!),
+                                      ),
+                                  ],
                                 ),
-                            ],
-                            if (modern &&
-                                kind == 'Payment' &&
-                                !supplier &&
-                                method != 'Cash')
-                              CheckboxListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: const Text('الحوالة لم تصل بعد'),
-                                subtitle: const Text(
-                                  'تُحفظ بانتظار التأكيد، ولا تغيّر الرصيد أو المقبوضات.',
-                                ),
-                                value: waiting,
-                                onChanged: (v) => setState(() => waiting = v!),
                               ),
                             if (modern &&
                                 hasPayment &&
                                 method == 'Cash' &&
                                 !supplier)
                               Surface(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    const Text(
-                                      'حساب الباقي',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                      ),
+                                color: const Color(0xFFECFDF5),
+                                child: ExpansionTile(
+                                  maintainState: true,
+                                  tilePadding: EdgeInsets.zero,
+                                  title: Text(
+                                    'حاسبة الفكّة السريعة (تسجيل الباقي رصيد)',
+                                    style: appText(
+                                      12,
+                                      weight: FontWeight.w800,
+                                      color: const Color(0xFF065F46),
                                     ),
+                                  ),
+                                  subtitle: Text(
+                                    'إذا أعطاك الزبون ورقة 20 أو 50 أو 100 أو 200 ₪',
+                                    style: appText(10, color: green),
+                                  ),
+                                  children: [
                                     field(
                                       handed,
                                       'المبلغ المسلّم نقداً (اختياري)',
@@ -628,7 +841,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                       ],
                                     ),
                                     Text(
-                                      'الباقي: ${money(((cents(handed.text) ?? 0) - requestedPayment).clamp(0, 99999999900) / 100)}',
+                                      'الباقي: ${displayMoney(((cents(handed.text) ?? 0) - requestedPayment).clamp(0, 99999999900) / 100)}',
                                     ),
                                     CheckboxListTile(
                                       contentPadding: EdgeInsets.zero,
@@ -643,77 +856,130 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                 ),
                               ),
                             if (modern)
-                              field(
-                                counterparty,
-                                kind == 'Payment'
-                                    ? 'اسم الدافع / المستلم'
-                                    : 'اسم مستلم البضاعة',
-                                max: 120,
+                              Surface(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Text(
+                                      kind == 'Payment'
+                                          ? 'اسم الدافع / المستلم (اختياري):'
+                                          : 'المستلم الفعلي للأغراض (اختياري):',
+                                      style: appText(
+                                        12,
+                                        weight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    if (!supplier && isInvoice)
+                                      Wrap(
+                                        spacing: 4,
+                                        runSpacing: 4,
+                                        children: [
+                                          for (final preset in [
+                                            'الزبون نفسه',
+                                            'ابنه',
+                                            'أخوه',
+                                            'أحد أفراد العائلة',
+                                          ])
+                                            DesignButton(
+                                              preset,
+                                              height: 30,
+                                              background: canvas,
+                                              onTap: () => counterparty.text =
+                                                  preset == 'الزبون نفسه'
+                                                  ? (party?['name'] ?? '')
+                                                  : preset,
+                                            ),
+                                        ],
+                                      ),
+                                    const SizedBox(height: 12),
+                                    field(
+                                      counterparty,
+                                      kind == 'Payment'
+                                          ? 'اسم الدافع / المستلم'
+                                          : 'اسم مستلم البضاعة',
+                                      max: 120,
+                                    ),
+                                  ],
+                                ),
                               ),
-                            if (isInvoice)
-                              field(
-                                invoice,
-                                'رقم الفاتورة (اختياري)',
-                                max: 100,
-                              ),
-                            if (modern && isInvoice)
-                              Wrap(
-                                spacing: 6,
+                            Surface(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  for (final preset in [
-                                    'مواد تموينية',
-                                    'خضار وفواكه',
-                                    'مخبوزات',
-                                    'أصناف متنوعة',
-                                  ])
-                                    ActionChip(
-                                      label: Text(preset),
-                                      onPressed: () => note.text = preset,
+                                  Text(
+                                    'البيان / الملاحظة (اختياري):',
+                                    style: appText(12, weight: FontWeight.w800),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  field(
+                                    note,
+                                    'وصف الحركة (اختياري)',
+                                    lines: 3,
+                                    max: 2000,
+                                  ),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          'التاريخ: ${day(when)}',
+                                          style: appText(
+                                            11,
+                                            color: secondaryText,
+                                          ),
+                                        ),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'تغيير التاريخ',
+                                        onPressed: () async {
+                                          final d = await showDatePicker(
+                                            context: context,
+                                            firstDate: DateTime(2000),
+                                            lastDate: DateTime.now(),
+                                            initialDate: when,
+                                          );
+                                          if (d != null && mounted) {
+                                            setState(
+                                              () => when = DateTime(
+                                                d.year,
+                                                d.month,
+                                                d.day,
+                                                when.hour,
+                                                when.minute,
+                                              ),
+                                            );
+                                          }
+                                        },
+                                        icon: const Icon(
+                                          Icons.calendar_today_outlined,
+                                          size: 20,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (pending == null)
+                                    OutlinedButton.icon(
+                                      onPressed: busy ? null : dictate,
+                                      icon: Icon(
+                                        listening ? Icons.stop : Icons.mic_none,
+                                        size: 20,
+                                      ),
+                                      label: Text(
+                                        listening
+                                            ? 'إيقاف التسجيل'
+                                            : 'إملاء وصف الحركة',
+                                      ),
                                     ),
                                 ],
                               ),
-                            field(
-                              note,
-                              'وصف الحركة (اختياري)',
-                              lines: 3,
-                              max: 2000,
-                            ),
-                            Row(
-                              children: [
-                                Expanded(child: Text('التاريخ: ${day(when)}')),
-                                IconButton(
-                                  tooltip: 'تغيير التاريخ',
-                                  onPressed: () async {
-                                    final d = await showDatePicker(
-                                      context: context,
-                                      firstDate: DateTime(2000),
-                                      lastDate: DateTime.now(),
-                                      initialDate: when,
-                                    );
-                                    if (d != null) {
-                                      setState(
-                                        () => when = DateTime(
-                                          d.year,
-                                          d.month,
-                                          d.day,
-                                          when.hour,
-                                          when.minute,
-                                        ),
-                                      );
-                                    }
-                                  },
-                                  icon: const Icon(
-                                    Icons.calendar_today_outlined,
-                                  ),
-                                ),
-                              ],
                             ),
                           ],
                         ),
                       ),
                       if (modern && party != null)
                         Surface(
-                          color: const Color(0xFFF1F2F8),
+                          color: lavender,
                           child: Builder(
                             builder: (_) {
                               final delta = pendingTransfer
@@ -741,13 +1007,18 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                     }),
                                   ),
                                   if (isInvoice)
-                                    Text('صافي الفاتورة: ${money(net / 100)}'),
+                                    Text(
+                                      'صافي الفاتورة: ${displayMoney(net / 100)}',
+                                    ),
                                 ],
                               );
                             },
                           ),
                         ),
-                      if (modern && !supplier && kind == 'Payment' && pending == null)
+                      if (modern &&
+                          !supplier &&
+                          kind == 'Payment' &&
+                          pending == null)
                         CheckboxListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text(
@@ -757,39 +1028,11 @@ class _TransactionScreenState extends State<TransactionScreen> {
                           value: receipt,
                           onChanged: (v) => setState(() => receipt = v!),
                         ),
-                      if (pending == null)
-                        OutlinedButton.icon(
-                          onPressed: busy ? null : dictate,
-                          icon: Icon(listening ? Icons.stop : Icons.mic_none),
-                          label: Text(
-                            listening ? 'إيقاف التسجيل' : 'إملاء وصف الحركة',
-                          ),
-                        ),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'راجع التفاصيل قبل الحفظ. لا يُسجّل الصوت أي حركة تلقائياً.',
-                        style: TextStyle(fontSize: 12, color: muted),
-                      ),
-                      const SizedBox(height: 20),
                       if (error != null)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          child: Text(
-                            error!,
-                            style: const TextStyle(color: Colors.red),
-                          ),
-                        ),
-                      BusyButton(
-                        label: pending == null
-                            ? 'حفظ الحركة'
-                            : 'إعادة محاولة حفظ نفس الحركة',
-                        busy: busy,
-                        onPressed: save,
-                      ),
+                        Text(error!, style: const TextStyle(color: Colors.red)),
                     ],
                   ),
                 ),
-                const SizedBox(height: 20),
               ],
             ),
           ),

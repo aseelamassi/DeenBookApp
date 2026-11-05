@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
+
 import '../core/api.dart';
 import '../core/format.dart';
 import '../core/ledger.dart';
 import 'theme.dart';
+import 'design.dart';
 
 class Width extends StatelessWidget {
-  const Width({super.key, required this.child, this.max = 760});
+  const Width({super.key, required this.child, this.max = 480});
   final Widget child;
   final double max;
   @override
@@ -33,7 +35,7 @@ class Surface extends StatelessWidget {
         side: const BorderSide(color: Color(0xFFE9EAF3)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         child: SizedBox(width: double.infinity, child: child),
       ),
     ),
@@ -206,16 +208,21 @@ Widget field(
             : null),
   ),
 );
-Widget amount(dynamic value, {Color color = navy, double size = 24}) => Text(
-  money(value),
-  textDirection: TextDirection.ltr,
-  style: TextStyle(
-    fontSize: size,
-    fontFamily: 'Money',
-    fontWeight: FontWeight.bold,
-    color: color,
-  ),
-);
+String displayMoney(dynamic value) => money(value).replaceFirst('.00', '');
+Widget amount(dynamic value, {Color color = navy, double size = 24}) =>
+    Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: displayMoney(value).replaceFirst(' ₪', '')),
+          TextSpan(
+            text: ' ₪',
+            style: TextStyle(fontSize: size * .65, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+      textDirection: TextDirection.rtl,
+      style: appText(size, color: color, weight: FontWeight.w900, height: 1.2),
+    );
 Widget compactAmount(dynamic value, {double size = 17}) => ConstrainedBox(
   constraints: const BoxConstraints(maxWidth: 112),
   child: FittedBox(
@@ -262,18 +269,6 @@ Widget entryTile(Json e, {String? name, VoidCallback? onConfirm}) {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            CircleAvatar(
-              backgroundColor: pending ? const Color(0xFFFFF1D6) : canvas,
-              child: Icon(
-                pending
-                    ? Icons.schedule
-                    : e['kind'] == 'Payment'
-                    ? Icons.south_west
-                    : Icons.receipt_long_outlined,
-                color: navy,
-              ),
-            ),
-            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -289,16 +284,26 @@ Widget entryTile(Json e, {String? name, VoidCallback? onConfirm}) {
                 ],
               ),
             ),
-            compactAmount(negative ? -value : value, size: 16),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 110),
+              child: FittedBox(
+                child: amount(
+                  negative ? -value : value,
+                  size: 14,
+                  color: negative ? green : orange,
+                ),
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 8),
-        Text(
-          methods[e['method']] ?? 'وسيلة قديمة',
-          style: const TextStyle(color: muted, fontSize: 12),
-        ),
+        if (e['kind'] == 'Payment' || amountCents(e['paidNow']) > 0)
+          Text(
+            methods[e['method']] ?? 'وسيلة قديمة',
+            style: appText(10, color: muted),
+          ),
         if ((e['note'] ?? '').toString().isNotEmpty)
-          Text('${e['note']}', style: const TextStyle(fontSize: 13)),
+          Text('${e['note']}', style: appText(11, color: secondaryText)),
         if ((e['counterpartyName'] ?? '').toString().isNotEmpty)
           Text(
             '${e['kind'] == 'Payment' ? 'الدافع / المستلم' : 'مستلم البضاعة'}: ${e['counterpartyName']}',
@@ -359,8 +364,29 @@ Widget entryTile(Json e, {String? name, VoidCallback? onConfirm}) {
 void message(BuildContext context, Object text) => ScaffoldMessenger.of(
   context,
 ).showSnackBar(SnackBar(content: Text('$text')));
-Future<T?> open<T>(BuildContext context, Widget screen) =>
-    Navigator.of(context).push<T>(MaterialPageRoute(builder: (_) => screen));
+Future<T?> open<T>(BuildContext context, Widget screen) {
+  if (screen is ModalForm) {
+    return showModalBottomSheet<T>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      clipBehavior: Clip.antiAlias,
+      showDragHandle: true,
+      constraints: const BoxConstraints(maxWidth: 480),
+      builder: (c) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(c).bottom),
+        child: SizedBox(
+          height: MediaQuery.sizeOf(c).height * .78,
+          child: screen,
+        ),
+      ),
+    );
+  }
+  return Navigator.of(
+    context,
+  ).push<T>(MaterialPageRoute(builder: (_) => screen));
+}
+
 Future<bool> confirm(BuildContext context, String title, String text) =>
     showDialog<bool>(
       context: context,

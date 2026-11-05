@@ -144,10 +144,13 @@ class Api {
     if (id is! String || id.isEmpty) return;
     _shopId = id;
     if (!_offlineMode) {
-      await storage.write('offline.identity', jsonEncode({
-        'shopId': id,
-        'verifiedAt': DateTime.now().toUtc().toIso8601String(),
-      }));
+      await storage.write(
+        'offline.identity',
+        jsonEncode({
+          'shopId': id,
+          'verifiedAt': DateTime.now().toUtc().toIso8601String(),
+        }),
+      );
       await offlineVault.saveSnapshot(id, '/api/subscription', null, data);
     }
   }
@@ -159,16 +162,30 @@ class Api {
       final identity = jsonDecode(raw) as Map;
       final id = identity['shopId'];
       final verified = DateTime.tryParse('${identity['verifiedAt']}');
-      if (id is! String || id.isEmpty || verified == null ||
+      if (id is! String ||
+          id.isEmpty ||
+          verified == null ||
           DateTime.now().toUtc().difference(verified.toUtc()) >
               const Duration(days: 7) ||
-          DateTime.now().toUtc().isBefore(verified.toUtc().subtract(const Duration(minutes: 5)))) {
+          DateTime.now().toUtc().isBefore(
+            verified.toUtc().subtract(const Duration(minutes: 5)),
+          )) {
         return false;
       }
-      final status = await offlineVault.readSnapshot(id, '/api/subscription', null);
-      final until = status is Map ? DateTime.tryParse('${status['paidUntil']}') : null;
-      if (status is! Map || status['suspended'] == true || until == null ||
-          !until.isAfter(DateTime.now().toUtc())) return false;
+      final status = await offlineVault.readSnapshot(
+        id,
+        '/api/subscription',
+        null,
+      );
+      final until = status is Map
+          ? DateTime.tryParse('${status['paidUntil']}')
+          : null;
+      if (status is! Map ||
+          status['suspended'] == true ||
+          until == null ||
+          !until.isAfter(DateTime.now().toUtc())) {
+        return false;
+      }
       _shopId = id;
       _setOffline(true);
       return true;
@@ -202,6 +219,7 @@ class Api {
     }
     return completed;
   }
+
   String? _access, _refresh;
   DateTime? _refreshExpiry;
   int _generation = 0;
@@ -322,10 +340,15 @@ class Api {
     final generation = _generation;
     final original = _access;
     final readable = method == 'GET';
-    final queuedTransaction = method == 'POST' &&
-        path == '/api/transactions' && body is Map<String, dynamic> &&
-        body['operationId'] is String && _shopId != null;
-    final transactionBody = queuedTransaction ? Map<String, dynamic>.from(body as Map) : null;
+    final queuedTransaction =
+        method == 'POST' &&
+        path == '/api/transactions' &&
+        body is Map<String, dynamic> &&
+        body['operationId'] is String &&
+        _shopId != null;
+    final transactionBody = queuedTransaction
+        ? Map<String, dynamic>.from(body as Map)
+        : null;
     if (queuedTransaction) {
       // Durable write first. Sending and crash recovery reuse the same ID.
       await offlineVault.addTransaction(_shopId!, transactionBody!);
@@ -347,7 +370,9 @@ class Api {
     }
 
     if (_access == null) {
-      return snapshotOrThrow(ApiFailure('البيانات غير متاحة محلياً. اتصل بالإنترنت أولاً.'));
+      return snapshotOrThrow(
+        ApiFailure('البيانات غير متاحة محلياً. اتصل بالإنترنت أولاً.'),
+      );
     }
     Future<Response<dynamic>> send() => dio.request(
       path,
@@ -363,8 +388,11 @@ class Api {
       try {
         result = await send();
       } on DioException catch (e) {
-        if (e.response?.statusCode != 401 || original == null ||
-            generation != _generation) rethrow;
+        if (e.response?.statusCode != 401 ||
+            original == null ||
+            generation != _generation) {
+          rethrow;
+        }
         if (_access == original) await refresh();
         if (generation != _generation || _access == null) {
           throw ApiFailure('انتهت الجلسة.', status: 401);
@@ -377,7 +405,10 @@ class Api {
         await offlineVault.saveSnapshot(_shopId!, path, query, result.data);
       }
       if (queuedTransaction) {
-        await offlineVault.removeTransaction(_shopId!, '${transactionBody!['operationId']}');
+        await offlineVault.removeTransaction(
+          _shopId!,
+          '${transactionBody!['operationId']}',
+        );
       }
       return result.data;
     } on DioException catch (e) {
@@ -390,10 +421,14 @@ class Api {
       final failure = ApiFailure.from(e);
       // Keep rejected financial operations for explicit review, but stop
       // automatic retries. Never silently lose a locally recorded payment.
-      if (queuedTransaction && _shopId != null &&
+      if (queuedTransaction &&
+          _shopId != null &&
           [400, 404, 409, 422].contains(failure.status)) {
-        await offlineVault.blockTransaction(_shopId!,
-            '${transactionBody!['operationId']}', failure.message);
+        await offlineVault.blockTransaction(
+          _shopId!,
+          '${transactionBody!['operationId']}',
+          failure.message,
+        );
       }
       return snapshotOrThrow(failure);
     } on ApiFailure catch (e) {
@@ -405,7 +440,9 @@ class Api {
       _responseObject(await request('GET', path, query: query));
   Future<void> logout() async {
     if ((await pendingCount()) != 0) {
-      throw ApiFailure('توجد حركات لم تتزامن بعد. زامنها قبل تسجيل الخروج حتى لا يتعطل إرسالها.');
+      throw ApiFailure(
+        'توجد حركات لم تتزامن بعد. زامنها قبل تسجيل الخروج حتى لا يتعطل إرسالها.',
+      );
     }
     if (_access != null) await request('POST', '/api/auth/logout');
     await clear();

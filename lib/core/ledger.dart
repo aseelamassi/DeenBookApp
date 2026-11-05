@@ -81,3 +81,26 @@ String entryDescription(Json e) => [
   if ((e['createdByName'] ?? '').toString().isNotEmpty)
     'سجّلها: ${e['createdByName']}',
 ].join('\n');
+
+// Summary of filtered statement entries; integer cents and confirmed payments only.
+Json historyTotals(List<Json> entries, {required bool supplier}) {
+  var invoices = 0, paid = 0, pending = 0;
+  for (final e in entries) {
+    if (e['pendingConfirmation'] == true) {
+      pending++;
+      continue;
+    }
+    if (e['kind'] == 'Debt' || e['kind'] == 'Purchase') {
+      invoices += amountCents(e['amount']) - amountCents(e['discount']);
+      paid += amountCents(e['paidNow']);
+    } else if (e['kind'] == 'Payment') {
+      paid += amountCents(e['amount']);
+    }
+  }
+  return {
+    'invoices': invoices / 100,
+    'received': supplier ? 0 : paid / 100,
+    'paid': supplier ? paid / 100 : 0,
+    'pendingCount': pending,
+  };
+}

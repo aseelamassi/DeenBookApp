@@ -17,21 +17,35 @@ class OfflineVault {
   }
 
   String _snapshotKey(String shopId, String path, Map<String, dynamic>? query) {
-    final parameters = query == null ? <String, dynamic>{} : Map<String, dynamic>.from(query);
+    final parameters = query == null
+        ? <String, dynamic>{}
+        : Map<String, dynamic>.from(query);
     final keys = parameters.keys.toList()..sort();
     final normalized = {for (final key in keys) key: parameters[key]};
-    final encoded = base64Url.encode(utf8.encode('$path|${jsonEncode(normalized)}'));
+    final encoded = base64Url.encode(
+      utf8.encode('$path|${jsonEncode(normalized)}'),
+    );
     return 'snapshot.$shopId.$encoded';
   }
 
-  Future<void> saveSnapshot(String shopId, String path, Map<String, dynamic>? query,
-      dynamic response) async {
+  Future<void> saveSnapshot(
+    String shopId,
+    String path,
+    Map<String, dynamic>? query,
+    dynamic response,
+  ) async {
     if (shopId.isEmpty) return;
-    await storage.write(_snapshotKey(shopId, path, query), jsonEncode(response));
+    await storage.write(
+      _snapshotKey(shopId, path, query),
+      jsonEncode(response),
+    );
   }
 
-  Future<dynamic> readSnapshot(String shopId, String path,
-      Map<String, dynamic>? query) async {
+  Future<dynamic> readSnapshot(
+    String shopId,
+    String path,
+    Map<String, dynamic>? query,
+  ) async {
     if (shopId.isEmpty) return null;
     final json = await storage.read(_snapshotKey(shopId, path, query));
     if (json == null) return null;
@@ -71,17 +85,20 @@ class OfflineVault {
         await storage.write(_outboxKey(shopId), jsonEncode(records));
       });
 
-  Future<void> blockTransaction(String shopId, String operationId,
-      String error) => _locked(() async {
-        final records = await readOutbox(shopId);
-        for (final record in records) {
-          if (record['operationId'] == operationId) {
-            record['blocked'] = true;
-            record['lastError'] = error;
-          }
-        }
-        await storage.write(_outboxKey(shopId), jsonEncode(records));
-      });
+  Future<void> blockTransaction(
+    String shopId,
+    String operationId,
+    String error,
+  ) => _locked(() async {
+    final records = await readOutbox(shopId);
+    for (final record in records) {
+      if (record['operationId'] == operationId) {
+        record['blocked'] = true;
+        record['lastError'] = error;
+      }
+    }
+    await storage.write(_outboxKey(shopId), jsonEncode(records));
+  });
 
   Future<void> removeTransaction(String shopId, String operationId) =>
       _locked(() async {

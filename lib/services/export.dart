@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart'
     show BuildContext, DateTimeRange, RenderBox, Offset;
 import 'package:flutter/services.dart';
@@ -6,6 +7,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
+
 import '../core/api.dart';
 import '../core/format.dart';
 import '../core/ledger.dart';
@@ -64,7 +66,7 @@ class Exports {
               style: pw.TextStyle(
                 fontSize: 18,
                 fontWeight: pw.FontWeight.bold,
-                color: PdfColor.fromHex('#292669'),
+                color: PdfColor.fromHex('#242872'),
               ),
             ),
             pw.Text(title, style: const pw.TextStyle(fontSize: 14)),
@@ -76,7 +78,7 @@ class Exports {
           child: pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
-              pw.Text('دفتر الأمانة', style: const pw.TextStyle(fontSize: 9)),
+              pw.Text('دفتر دين', style: const pw.TextStyle(fontSize: 9)),
               pw.Text(
                 '${c.pageNumber} / ${c.pagesCount}',
                 textDirection: pw.TextDirection.ltr,
@@ -114,7 +116,7 @@ class Exports {
                 color: PdfColors.white,
               ),
               headerDecoration: pw.BoxDecoration(
-                color: PdfColor.fromHex('#292669'),
+                color: PdfColor.fromHex('#242872'),
               ),
               cellAlignment: pw.Alignment.centerRight,
               cellPadding: const pw.EdgeInsets.all(6),
@@ -227,6 +229,38 @@ class Exports {
     await Printing.layoutPdf(
       name: 'DeenBook-report.pdf',
       onLayout: (_) => Future.value(bytes),
+    );
+  }
+
+  static String csvCell(String text) {
+    final safe = RegExp(r'^[\s]*[=+@-]').hasMatch(text) ? "'$text" : text;
+    return '"${safe.replaceAll('"', '""')}"';
+  }
+
+  static String historyCsvText(List<Json> rows, Map<String, String> names) =>
+      '\uFEFF${[
+        ['التاريخ', 'الحساب', 'الحركة', 'المبلغ بعد الخصم', 'حالة الحوالة', 'الوصف'].map(csvCell).join(','),
+        ...rows.map((e) => [csvCell(day(e['occurredAt'])), csvCell(names[e['partyId']] ?? ''), csvCell(kinds[e['kind']] ?? 'حركة'), decimalMoney(amountCents(e['amount']) - amountCents(e['discount'])), csvCell(e['pendingConfirmation'] == true ? 'بانتظار التأكيد — غير محتسبة' : 'مسجّلة'), csvCell(entryDescription(e))].join(',')),
+      ].join('\r\n')}';
+  static Future<void> historyCsv(
+    BuildContext context,
+    List<Json> rows,
+    Map<String, String> names,
+  ) async {
+    final box = context.findRenderObject() as RenderBox?;
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [
+          XFile.fromData(
+            Uint8List.fromList(utf8.encode(historyCsvText(rows, names))),
+            mimeType: 'text/csv',
+          ),
+        ],
+        fileNameOverrides: ['DeenBook-history.csv'],
+        sharePositionOrigin: box == null
+            ? null
+            : box.localToGlobal(Offset.zero) & box.size,
+      ),
     );
   }
 

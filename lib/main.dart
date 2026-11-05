@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+
 import 'core/api.dart';
 import 'core/session.dart';
 import 'core/storage.dart';
@@ -40,9 +41,18 @@ class DeenBookApp extends StatelessWidget {
               ? '${session.shopId}:${session.active}'
               : 'signed-out',
         ),
-        title: 'دفتر الأمانة',
+        title: 'دفتر دين',
         debugShowCheckedModeBanner: false,
         theme: appTheme(),
+        builder: (context, child) => ColoredBox(
+          color: const Color(0xFF101127),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: child!,
+            ),
+          ),
+        ),
         locale: const Locale('ar'),
         supportedLocales: const [Locale('ar')],
         localizationsDelegates: GlobalMaterialLocalizations.delegates,

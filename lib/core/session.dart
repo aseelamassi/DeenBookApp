@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import 'api.dart';
 
 class Session extends ChangeNotifier {
@@ -30,21 +31,23 @@ class Session extends ChangeNotifier {
   bool get isTrial => status?['isTrial'] == true;
   int get trialDaysRemaining {
     if (!isTrial) return 0;
-    if (!isOffline) return (status?['trialDaysRemaining'] as num?)?.toInt() ?? 0;
+    if (!isOffline) {
+      return (status?['trialDaysRemaining'] as num?)?.toInt() ?? 0;
+    }
     final until = DateTime.tryParse('${status?['paidUntil']}');
     if (until == null) return 0;
     final hours = until.difference(DateTime.now().toUtc()).inHours;
     return hours < 0 ? 0 : (hours / 24).ceil();
   }
+
   Future<void>? _loadingStatus;
   String get shopId => status?['id'] as String? ?? '';
   String get shopName =>
-      settings?['name'] as String? ??
-      status?['name'] as String? ??
-      'دفتر الأمانة';
+      settings?['name'] as String? ?? status?['name'] as String? ?? 'دفتر دين';
   bool get active {
     final paidUntil = DateTime.tryParse('${status?['paidUntil']}');
-    return status?['active'] == true && paidUntil != null &&
+    return status?['active'] == true &&
+        paidUntil != null &&
         paidUntil.isAfter(DateTime.now().toUtc());
   }
 

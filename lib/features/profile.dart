@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/format.dart';
 import '../core/session.dart';
@@ -88,16 +89,20 @@ class AccountHelp extends StatefulWidget {
 
 class _AccountHelpState extends State<AccountHelp> {
   int selected = 3, step = 0;
-  bool trial = true;
+  bool trial = true, passwordHidden = true;
   final name = TextEditingController(),
       phone = TextEditingController(),
-      owner = TextEditingController();
+      owner = TextEditingController(),
+      password = TextEditingController(),
+      sender = TextEditingController();
   final form = GlobalKey<FormState>();
   @override
   void dispose() {
     name.dispose();
     phone.dispose();
     owner.dispose();
+    password.dispose();
+    sender.dispose();
     super.dispose();
   }
 
@@ -114,6 +119,8 @@ class _AccountHelpState extends State<AccountHelp> {
             ),
           if (owner.text.trim().isNotEmpty)
             'اسم صاحب المحل: ${owner.text.trim()}',
+          if (!trial && sender.text.trim().isNotEmpty)
+            'اسم صاحب الحوالة: ${sender.text.trim()}',
         ].join('\n');
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -146,7 +153,7 @@ class _AccountHelpState extends State<AccountHelp> {
                                   [
                                     'بيانات المحل',
                                     'اختر الخطة',
-                                    'مراجعة الطلب',
+                                    'الدفع والتفعيل',
                                   ][i],
                                   style: appText(
                                     10,
@@ -168,7 +175,7 @@ class _AccountHelpState extends State<AccountHelp> {
                       : [
                           'خلّينا نتعرّف على محلك',
                           'ابدأ بالطريقة التي تناسبك',
-                          'طلبك جاهز للمراجعة',
+                          'تحويل رسوم الاشتراك وتفعيل المحل',
                         ][step],
                   style: appText(22, weight: FontWeight.w900),
                 ),
@@ -179,7 +186,7 @@ class _AccountHelpState extends State<AccountHelp> {
                       : [
                           'أدخل بيانات المحل ورقم الجوال الذي ستستخدمه للدخول.',
                           'جرّب دفتر دين 14 يوماً مجاناً، أو اختر اشتراكك.',
-                          'راجع التفاصيل ثم أرسلها لإدارة الخدمة لإنشاء الحساب.',
+                          'راجع بيانات تحويل الاشتراك. يتطلب التفعيل موافقة الإدارة.',
                         ][step],
                   style: appText(12, color: secondaryText),
                 ),
@@ -193,6 +200,24 @@ class _AccountHelpState extends State<AccountHelp> {
                           field(owner, 'اسم صاحب المحل', required: true),
                           field(name, 'اسم المحل', required: true),
                         ],
+                        if (!widget.reset)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 16),
+                            child: TextFormField(
+                              controller: password,
+                              obscureText: passwordHidden,
+                              decoration: InputDecoration(
+                                labelText: 'كلمة المرور',
+                                suffixIcon: IconButton(
+                                  onPressed: () => setState(() => passwordHidden = !passwordHidden),
+                                  icon: Icon(passwordHidden ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                                ),
+                              ),
+                              validator: (v) => (v?.length ?? 0) < 8
+                                  ? 'كلمة المرور يجب أن تكون 8 أحرف على الأقل'
+                                  : null,
+                            ),
+                          ),
                         field(
                           phone,
                           'رقم الجوال',
@@ -266,56 +291,44 @@ class _AccountHelpState extends State<AccountHelp> {
                     }),
                   ),
                 ],
-                if (!widget.reset && step == 2)
-                  Surface(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          name.text.trim(),
-                          style: appText(16, weight: FontWeight.w900),
-                        ),
-                        Text(
-                          owner.text.trim(),
-                          style: appText(12, color: secondaryText),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          phoneNumber(phone.text) ?? phone.text,
-                          textDirection: TextDirection.ltr,
-                        ),
-                        const Divider(height: 28),
-                        SoftTag(
-                          trial
-                              ? 'تجربة مجانية · 14 يوم'
-                              : selected == 1
-                              ? 'شهر واحد · 60 ₪'
-                              : '3 أشهر · 150 ₪',
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'إنشاء الحساب وتفعيل الاشتراك يتمان من الإدارة. لم يُرسل الطلب بعد.',
-                          style: appText(11, color: secondaryText),
-                        ),
-                      ],
-                    ),
-                  ),
+                if (!widget.reset && step == 2) ...[
+                  Surface(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(name.text.trim(), style: appText(17, weight: FontWeight.w900)),
+                      Text('${owner.text.trim()} · ${phoneNumber(phone.text) ?? phone.text}', style: appText(12, color: secondaryText)),
+                      const SizedBox(height: 12),
+                      SoftTag(trial ? 'تجربة مجانية · 14 يوماً' : selected == 1 ? 'شهر · 60 ₪' : '3 أشهر · 150 ₪'),
+                    ],
+                  )),
+                  const SizedBox(height: 16),
+                  if (trial) ...[
+                    const _TrialInformation(),
+                    const SizedBox(height: 12),
+                    Text('بدء الفترة المجانية وتواريخها الفعلية يتطلبان إنشاء الحساب من الخادم؛ لا يبدأ احتسابها بمجرد عرض هذه الصفحة.', style: appText(11, color: secondaryText)),
+                  ] else ...[
+                    _PaymentInstructions(sender: sender),
+                    const SizedBox(height: 12),
+                    Text('بعد التحويل وإرسال الطلب سيظل الاشتراك قيد المراجعة لحين تأكيد الإدارة. هذه الشاشة لا تثبت وصول التحويل.', style: appText(11, color: secondaryText)),
+                  ],
+                ],
                 const SizedBox(height: 24),
                 BusyButton(
                   label: widget.reset || step == 2
-                      ? (hasSupportContact
-                            ? 'متابعة عبر واتساب'
-                            : widget.reset
-                            ? 'عرض طلب المساعدة'
-                            : 'عرض طلب الاشتراك')
+                      ? (widget.reset ? 'طلب استعادة الحساب' : trial ? 'طلب بدء تجربة مجانية' : 'أرسلت التحويل — إرسال طلب التفعيل')
                       : 'متابعة ←',
-                  onPressed: () {
+                  onPressed: () async {
                     if ((widget.reset || step == 0) &&
                         !form.currentState!.validate()) {
                       return;
                     }
                     if (widget.reset || step == 2) {
-                      contact(context, request);
+                      await contact(context, request);
+                      if (mounted && !widget.reset && !trial) {
+                        Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => _PendingActivationPreview(shop: name.text.trim(), owner: owner.text.trim(), months: selected, sender: sender.text.trim()),
+                        ));
+                      }
                     } else {
                       setState(() => step++);
                     }
@@ -330,7 +343,7 @@ class _AccountHelpState extends State<AccountHelp> {
                 Text(
                   widget.reset
                       ? 'لن نطلب كلمة مرورك في رسالة.'
-                      : 'حساب واحد للمحل وبيانات محفوظة سحابياً. لا حاجة لإرسال رمز تحقق.',
+                      : 'كلمة المرور لا تُرسل للإدارة أو عبر واتساب. تفعيل الحساب وربط العاملين يحتاجان دعم الخادم.',
                   textAlign: TextAlign.center,
                   style: appText(11, color: muted),
                 ),
@@ -340,6 +353,106 @@ class _AccountHelpState extends State<AccountHelp> {
         ],
       ),
     ),
+  );
+}
+
+/// Payment instructions matching the supplied reference. Only known bank
+/// details are shown; wallet destinations require configuration by backend.
+class _PaymentInstructions extends StatefulWidget {
+  const _PaymentInstructions({required this.sender});
+  final TextEditingController sender;
+  @override
+  State<_PaymentInstructions> createState() => _PaymentInstructionsState();
+}
+
+class _PaymentInstructionsState extends State<_PaymentInstructions> {
+  int destination = 0;
+  @override
+  Widget build(BuildContext context) => Surface(child: Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text('تحويل رسوم الاشتراك وتفعيل المحل', style: appText(17, weight: FontWeight.w900)),
+      const SizedBox(height: 8),
+      Text('أولاً: اختر وجهة التحويل', style: appText(13, weight: FontWeight.w800)),
+      const SizedBox(height: 8),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final (i, label) in [(0, 'بنك فلسطين'), (1, 'محفظتي PalPay'), (2, 'جوال بي')])
+          ChoiceChip(label: Text(label), selected: destination == i, onSelected: (_) => setState(() => destination = i)),
+      ]),
+      const SizedBox(height: 12),
+      if (destination == 0) ...[
+        _copyLine(context, 'صاحب الحساب المستلم', 'لؤي محمد أبو زعنونة'),
+        _copyLine(context, 'رقم الجوال', '0594301646'),
+        _copyLine(context, 'IBAN', 'PS92PALS045310978160993000000'),
+      ] else
+        Text('لم تُضف الإدارة بيانات التحويل لهذه المحفظة بعد. اختر بنك فلسطين أو تواصل مع الإدارة.', style: appText(12, color: secondaryText)),
+      const SizedBox(height: 14),
+      Text('ثانياً: اسم المرسل (صاحب الحساب المحوّل)', style: appText(12, weight: FontWeight.w800)),
+      TextField(controller: widget.sender, decoration: const InputDecoration(hintText: 'اسم صاحب الحوالة')),
+      const SizedBox(height: 8),
+      Text('ثالثاً: صورة إشعار التحويل (اختياري)', style: appText(12, weight: FontWeight.w800)),
+      Text('رفع الصورة وإرسالها للإدارة يتطلب واجهة Backend للملفات. لا يتم رفع أي مستند من هذه النسخة.', style: appText(11, color: secondaryText)),
+    ],
+  ));
+  Widget _copyLine(BuildContext context, String title, String value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 5),
+    child: Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: lavender, borderRadius: BorderRadius.circular(12)),
+      child: Row(children: [
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: appText(11, color: secondaryText)),
+          SelectableText(value, textDirection: title == 'صاحب الحساب المستلم' ? TextDirection.rtl : TextDirection.ltr, style: appText(12, weight: FontWeight.w900)),
+        ])),
+        IconButton(tooltip: 'نسخ $title', onPressed: () async {
+          await Clipboard.setData(ClipboardData(text: value));
+          if (context.mounted) message(context, 'تم النسخ');
+        }, icon: const Icon(Icons.copy_outlined)),
+      ]),
+    ),
+  );
+}
+
+class _TrialInformation extends StatelessWidget {
+  const _TrialInformation();
+  @override
+  Widget build(BuildContext context) => Surface(child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text('تجربة مجانية لمدة 14 يوماً', style: appText(18, weight: FontWeight.w900, color: green)),
+      const Text('سيظهر تاريخ البداية والانتهاء فور تأكيد إنشاء الحساب من الخادم.'),
+      const SizedBox(height: 10),
+      OutlinedButton.icon(onPressed: () => message(context, 'إضافة عاملين اثنين تتطلب تفعيل الحساب وربط العاملين من الخادم.'), icon: const Icon(Icons.people_outline), label: const Text('إضافة عاملين')),
+      OutlinedButton.icon(onPressed: () => message(context, 'بعد إنشاء الحساب وتفعيل التجربة من الخادم، سجّل الدخول برقم الجوال وكلمة المرور لبدء الاستخدام.'), icon: const Icon(Icons.login), label: const Text('البدء باستخدام التطبيق')),
+    ],
+  ));
+}
+
+/// Status preview; never claim that the server received or approved payment.
+class _PendingActivationPreview extends StatelessWidget {
+  const _PendingActivationPreview({required this.shop, required this.owner, required this.months, required this.sender});
+  final String shop, owner, sender;
+  final int months;
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('متابعة طلب التفعيل')),
+    body: Width(child: ListView(padding: const EdgeInsets.all(20), children: [
+      const Icon(Icons.hourglass_empty_rounded, color: orange, size: 52),
+      const SizedBox(height: 16),
+      Text('طلب اشتراك قيد المراجعة', textAlign: TextAlign.center, style: appText(23, weight: FontWeight.w900)),
+      const SizedBox(height: 10),
+      Text('هذه معاينة لحالة قيد التفعيل. لم يتم التأكد من إرسال الطلب أو وصول الحوالة إلى الخادم بعد. تظهر الحالة الرسمية بعد ربط واجهة التسجيل بالـ Backend.', textAlign: TextAlign.center, style: appText(12, color: secondaryText)),
+      const SizedBox(height: 20),
+      Surface(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('المحل: $shop'),
+        Text('المالك: $owner'),
+        Text('الخطة: ${months == 1 ? 'شهر · 60 ₪' : '3 أشهر · 150 ₪'}'),
+        if (sender.isNotEmpty) Text('اسم المرسل: $sender'),
+        const SizedBox(height: 10),
+        const SoftTag('بانتظار التحقق من إدارة الخدمة'),
+      ])),
+      OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('تعديل معلومات التحويل')),
+    ])),
   );
 }
 
@@ -520,11 +633,20 @@ class WorkersScreen extends StatelessWidget {
                 ],
               ),
             ),
-            const Empty(
-              'حسابات العاملين',
-              'إضافة العاملين وإدارة صلاحياتهم غير متاحة في الإصدار الحالي. حساب صاحب المحل هو الحساب المدعوم حالياً.',
-              icon: Icons.badge_outlined,
-            ),
+            Surface(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('العاملون · حتى عاملين اثنين', style: appText(15, weight: FontWeight.w900)),
+                const SizedBox(height: 8),
+                Text('يحتاج كل عامل لحساب مستقل مرتبط بالمحل وصلاحيات يحددها المالك، مع مزامنة الحركات على جميع الأجهزة.', style: appText(12, color: secondaryText)),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: () => message(context, 'يلزم دعم إنشاء حسابات العاملين وصلاحياتهم من Backend قبل تفعيل الإضافة.'),
+                  icon: const Icon(Icons.person_add_alt_1_outlined),
+                  label: const Text('إضافة عامل (تحتاج تفعيل الخدمة)'),
+                ),
+              ],
+            )),
           ],
         ),
       ),

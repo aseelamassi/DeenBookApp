@@ -48,7 +48,9 @@ class DeenBookApp extends StatelessWidget {
           color: const Color(0xFF101127),
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 480),
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(context).width >= 700 ? 820 : 480,
+              ),
               child: child!,
             ),
           ),

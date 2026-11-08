@@ -257,7 +257,7 @@ Widget partyTile(Json p, VoidCallback onTap) => Card(
     trailing: compactAmount(((p['balance'] as num?) ?? 0).abs()),
   ),
 );
-Widget entryTile(Json e, {String? name, VoidCallback? onConfirm}) {
+Widget entryTile(Json e, {String? name, VoidCallback? onConfirm, VoidCallback? onVoid}) {
   final pending = e['pendingConfirmation'] == true;
   final value = ((e['amount'] as num?) ?? 0) - ((e['discount'] as num?) ?? 0);
   final negative = ['Payment', 'Return'].contains(e['kind']);
@@ -340,6 +340,16 @@ Widget entryTile(Json e, {String? name, VoidCallback? onConfirm}) {
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
             ),
           ),
+        if (onVoid != null) ...[
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton.icon(
+              onPressed: onVoid,
+              icon: const Icon(Icons.cancel_outlined, size: 18),
+              label: const Text('شطب الحركة'),
+            ),
+          ),
+        ],
         if (pending) ...[
           const SizedBox(height: 8),
           const Text(

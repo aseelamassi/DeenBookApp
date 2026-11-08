@@ -258,32 +258,47 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
             ],
           ),
         ),
-        floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-        floatingActionButton: FloatingActionButton(
-          backgroundColor: orange,
-          elevation: 0,
-          highlightElevation: 0,
-          shape: const CircleBorder(side: BorderSide(color: canvas, width: 4)),
-          foregroundColor: Colors.white,
-          tooltip: 'إضافة حركة',
-          onPressed: () => quickAction(context),
-          child: const Icon(Icons.add, size: 32),
-        ),
-        bottomNavigationBar: BottomAppBar(
-          height: 64,
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          notchMargin: 7,
-          color: Colors.white,
-          surfaceTintColor: Colors.transparent,
-          elevation: 0,
-          child: Row(
-            children: [
-              nav(0, 'الرئيسية', Icons.home_outlined),
-              nav(1, 'الزبائن', Icons.people_outline),
-              const SizedBox(width: 58),
-              nav(2, 'الموردون', Icons.local_shipping_outlined),
-              nav(3, 'الأصناف', Icons.shopping_bag_outlined),
-            ],
+        // Keep the quick-action button inside the navigation layout instead of
+        // Scaffold.floatingActionButton: SnackBars otherwise move the FAB.
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: SizedBox(
+            height: 82,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.topCenter,
+              children: [
+                Positioned.fill(
+                  top: 16,
+                  child: ColoredBox(
+                    color: Colors.white,
+                    child: Row(
+                      children: [
+                        nav(0, 'الرئيسية', Icons.home_outlined),
+                        nav(1, 'الزبائن', Icons.people_outline),
+                        const SizedBox(width: 72),
+                        nav(2, 'الموردون', Icons.local_shipping_outlined),
+                        nav(3, 'الأصناف', Icons.shopping_bag_outlined),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 0,
+                  child: Material(
+                    color: orange,
+                    elevation: 3,
+                    shape: const CircleBorder(side: BorderSide(color: canvas, width: 4)),
+                    child: IconButton(
+                      tooltip: 'إضافة حركة',
+                      onPressed: () => quickAction(context),
+                      icon: const Icon(Icons.add, size: 31, color: Colors.white),
+                      constraints: const BoxConstraints.tightFor(width: 64, height: 64),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -431,7 +446,7 @@ class HomeScreen extends StatelessWidget {
                       children: [
                         Expanded(
                           child: DesignButton(
-                            'تسجيل مشتريات (دين)',
+                            'تسجيل مشتريات دين',
                             icon: Icons.add,
                             background: orange,
                             foreground: Colors.white,

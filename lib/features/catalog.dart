@@ -420,7 +420,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
             children: [
               Expanded(
                 child: DesignButton(
-                  supplier ? 'تسجيل فاتورة مورد' : 'تسجيل مشتريات (دين)',
+                  supplier ? 'تسجيل فاتورة مورد' : 'تسجيل مشتريات دين',
                   icon: Icons.add,
                   height: 44,
                   background: orange,
@@ -1401,6 +1401,7 @@ class _PartyDetailState extends State<PartyDetail> {
                               .map(
                                 (e) => entryTile(
                                   e,
+                                  onVoid: () => message(context, 'شطب الحركة يحتاج إلى مسار إلغاء معتمد من الخادم يعكس أثرها المالي ويحفظ سجل التدقيق؛ لم يتم شطب أي حركة.'),
                                   onConfirm: () async {
                                     if (await Receipts.confirmTransfer(
                                           context,

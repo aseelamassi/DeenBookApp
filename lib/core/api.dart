@@ -264,6 +264,16 @@ class Api {
     _refreshExpiry = expiry;
   }
 
+  /// Public shop signup: never claims approval of a payment.
+  Future<Json> registerShop(Json data) async {
+    try {
+      final result = await dio.post('/api/registration', data: data);
+      return _responseObject(result.data);
+    } on DioException catch (e) {
+      throw ApiFailure.from(e);
+    }
+  }
+
   Future<void> login(String phone, String password) async {
     final generation = ++_generation;
     _shopId = null;

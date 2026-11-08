@@ -39,6 +39,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
       final session = Scope.of(context);
       if (session.pendingSync > 0 || session.isOffline) {
         session.synchronize();
+      } else {
+        // Refresh remote changes from other workers' devices on the open tab.
+        session.changed();
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -49,7 +52,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
-      Scope.of(context).synchronize();
+      final session = Scope.of(context);
+      session.synchronize();
+      session.changed();
     }
   }
 
@@ -120,7 +125,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                     ),
                   ),
                   Text(
-                    'المستخدم: ${session.settings?['ownerName'] ?? 'المالك'} (المالك)',
+                    'المستخدم: ${session.isOwner ? 'صاحب المحل' : 'عامل'} · ${session.shopName}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: appText(
@@ -848,13 +853,14 @@ class ShopDrawer extends StatelessWidget {
                     () => go(const SubscriptionScreen()),
                     featured: true,
                   ),
-                  tile(
-                    'العاملون',
-                    'إدارة الفريق والتبديل وقت الدوام',
-                    Icons.people_alt_outlined,
-                    () => go(const WorkersScreen()),
-                    featured: true,
-                  ),
+                  if (s.isOwner)
+                    tile(
+                      'العاملون',
+                      'إدارة الفريق والتبديل وقت الدوام',
+                      Icons.people_alt_outlined,
+                      () => go(const WorkersScreen()),
+                      featured: true,
+                    ),
                   const SizedBox(height: 14),
                   tile(
                     'الملف الشخصي وإعدادات المحل',

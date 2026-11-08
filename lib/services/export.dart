@@ -224,6 +224,23 @@ class Exports {
         ['صافي النقد في الفترة', pdfMoney(c['netCash'])],
         ['الذمم الحالية على الزبائن', pdfMoney(s['receivables'])],
         ['الذمم الحالية للموردين', pdfMoney(s['payables'])],
+        ['ــــــــــــ تفاصيل المشتريات ــــــــــــ', ''],
+        for (final row in (data['purchases']['items'] as List))
+          [
+            '${row['partyName']} · ${day(row['entry']['occurredAt'])}',
+            [
+              'قيمة بعد الخصم: ${pdfMoney((row['entry']['amount'] as num) - (row['entry']['discount'] as num? ?? 0))}',
+              'مدفوع: ${pdfMoney(row['entry']['paidNow'])}',
+              if ('${row['entry']['counterpartyName'] ?? ''}'.trim().isNotEmpty)
+                'اللي إجا اشترى: ${row['entry']['counterpartyName']}',
+              if ((row['entry']['items'] as List? ?? []).isNotEmpty)
+                'الأصناف: ${(row['entry']['items'] as List).map((x) => '${x['name']} × ${x['quantity']} ${x['unit']}').join('، ')}',
+              if ('${row['entry']['note'] ?? ''}'.trim().isNotEmpty)
+                'ملاحظات: ${row['entry']['note']}',
+            ].join(' | '),
+          ],
+        if (data['purchases']['truncated'] == true)
+          ['تنبيه', 'النتائج تتجاوز 5000 حركة؛ اختر فترة أقصر'],
       ],
     );
     await Printing.layoutPdf(

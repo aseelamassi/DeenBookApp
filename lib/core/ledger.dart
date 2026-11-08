@@ -72,6 +72,8 @@ List<Json> runningStatement(Json statement) {
 
 String entryDescription(Json e) => [
   if (e['pendingConfirmation'] == true) 'بانتظار وصول الحوالة — لم تُحتسب دفعة',
+  if (e['method'] != 'Cash' && (e['reference'] ?? '').toString().isNotEmpty)
+    'اسم المحوِّل: ${e['reference']}',
   if ((e['counterpartyName'] ?? '').toString().isNotEmpty)
     'المستلم / الدافع: ${e['counterpartyName']}',
   if (amountCents(e['discount']) > 0) 'خصم: ${money(e['discount'])}',

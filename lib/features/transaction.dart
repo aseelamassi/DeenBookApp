@@ -533,33 +533,55 @@ class _TransactionScreenState extends State<TransactionScreen> {
                               ],
                             ),
                             const SizedBox(height: 10),
-                            Material(
-                              color: const Color(0xFFF7F8FB),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                                side: const BorderSide(color: lineColor),
+                            if (widget.party == null && pending == null)
+                              Autocomplete<Json>(
+                                key: ValueKey('party-search-$supplier'),
+                                displayStringForOption: (p) => '${p['name']}',
+                                optionsBuilder: (query) async {
+                                  final text = query.text.trim();
+                                  // Fetch suggestions as the user types; never navigate away.
+                                  try {
+                                    final response = await Scope.of(context).api.get(
+                                      supplier ? '/api/suppliers' : '/api/customers',
+                                      query: {'search': text, 'sort': 'name', 'size': 30},
+                                    );
+                                    return (response['items'] as List)
+                                        .map((p) => Map<String, dynamic>.from(p));
+                                  } catch (_) {
+                                    return <Json>[];
+                                  }
+                                },
+                                onSelected: (chosen) async {
+                                  final details = await Scope.of(context).api.get('/api/parties/${chosen['id']}');
+                                  if (mounted) setState(() {
+                                    party = Map<String, dynamic>.from(details);
+                                    counterparty.text = '${party!['name']}';
+                                  });
+                                },
+                                fieldViewBuilder: (context, controller, focusNode, onSubmitted) =>
+                                    TextFormField(
+                                  controller: controller,
+                                  focusNode: focusNode,
+                                  decoration: InputDecoration(
+                                    hintText: 'ابحث باسم ${supplier ? 'المورد' : 'الزبون'} واختر من الاقتراحات',
+                                    prefixIcon: const Icon(Icons.search),
+                                    suffixIcon: const Icon(Icons.arrow_drop_down),
+                                  ),
+                                  onChanged: (value) {
+                                    if (party != null && value.trim() != '${party!['name']}') {
+                                      setState(() => party = null);
+                                    }
+                                  },
+                                ),
+                              )
+                            else
+                              ListTile(
+                                tileColor: const Color(0xFFF7F8FB),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                leading: const Icon(Icons.person_outline),
+                                title: Text('${party?['name'] ?? 'اختر الزبون'}'),
+                                trailing: const Icon(Icons.lock_outline),
                               ),
-                              child: ListTile(
-                                dense: true,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                ),
-                                title: Text(
-                                  party?['name'] ??
-                                      'اختر ${supplier ? 'المورد' : 'الزبون'}',
-                                  style: appText(13),
-                                ),
-                                trailing: Icon(
-                                  widget.party == null && pending == null
-                                      ? Icons.expand_more
-                                      : Icons.lock_outline,
-                                  size: 18,
-                                ),
-                                onTap: widget.party == null && pending == null
-                                    ? choose
-                                    : null,
-                              ),
-                            ),
                           ],
                         ),
                       ),
@@ -677,7 +699,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                       ),
                                     field(
                                       paid,
-                                      'المدفوع الآن — شيكل',
+                                      'المبلغ المدفوع من الزبون — شيكل',
                                       keyboard:
                                           const TextInputType.numberWithOptions(
                                             decimal: true,
@@ -771,8 +793,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                       const SizedBox(height: 12),
                                       field(
                                         reference,
-                                        'رقم المرجع',
-                                        required: !modern,
+                                        'اسم المحوِّل (بنك / محفظة / جوال باي)',
+                                        required: false,
                                         max: 100,
                                       ),
                                     ],
@@ -864,7 +886,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                     Text(
                                       kind == 'Payment'
                                           ? 'اسم الدافع / المستلم (اختياري):'
-                                          : 'المستلم الفعلي للأغراض (اختياري):',
+                                          : 'اسم الشخص اللي إجا اشترى أو استلم البضاعة (اختياري):',
                                       style: appText(
                                         12,
                                         weight: FontWeight.w800,
@@ -898,7 +920,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                       counterparty,
                                       kind == 'Payment'
                                           ? 'اسم الدافع / المستلم'
-                                          : 'اسم مستلم البضاعة',
+                                          : 'مين اللي إجا اشترى / استلم البضاعة؟',
                                       max: 120,
                                     ),
                                   ],
@@ -909,7 +931,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Text(
-                                    'البيان / الملاحظة (اختياري):',
+                                    isInvoice ? 'شو اشترى؟ / ملاحظات الفاتورة (اختياري):' : 'البيان / الملاحظة (اختياري):',
                                     style: appText(12, weight: FontWeight.w800),
                                   ),
                                   const SizedBox(height: 10),

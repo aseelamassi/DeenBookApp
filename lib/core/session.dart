@@ -10,6 +10,7 @@ class Session extends ChangeNotifier {
       ledgerV2 = false;
       error = null;
       pendingSync = 0;
+      workerSetup = false;
       notifyListeners();
     };
     api.onForbidden = () {
@@ -20,6 +21,7 @@ class Session extends ChangeNotifier {
   final Api api;
   Json? status, settings;
   bool loading = true;
+  bool workerSetup = false;
   bool ledgerV2 = false;
   String? error;
   String? startupError;
@@ -29,6 +31,7 @@ class Session extends ChangeNotifier {
   String? syncError;
   bool get isOffline => api.isOffline;
   bool get isTrial => status?['isTrial'] == true;
+  bool get isOwner => status?['isOwner'] != false;
   int get trialDaysRemaining {
     if (!isTrial) return 0;
     if (!isOffline) {
@@ -69,6 +72,13 @@ class Session extends ChangeNotifier {
     await api.login(phone, password);
     await reload();
   }
+
+  Future<void> loginForWorkerSetup(String phone, String password) async {
+    workerSetup = true;
+    try { await login(phone, password); }
+    catch (_) { workerSetup = false; rethrow; }
+  }
+  void finishWorkerSetup() { workerSetup = false; notifyListeners(); }
 
   Future<void> reload() =>
       _loadingStatus ??= _load().whenComplete(() => _loadingStatus = null);

@@ -1401,7 +1401,20 @@ class _PartyDetailState extends State<PartyDetail> {
                               .map(
                                 (e) => entryTile(
                                   e,
-                                  onVoid: () => message(context, 'شطب الحركة يحتاج إلى مسار إلغاء معتمد من الخادم يعكس أثرها المالي ويحفظ سجل التدقيق؛ لم يتم شطب أي حركة.'),
+                                  onVoid: Scope.of(context).isOwner ? () async {
+                                    if (!await confirm(context, 'شطب الحركة',
+                                        'سيتم إلغاء الأثر المالي للحركة من كشف الحساب مع الاحتفاظ بسجل تدقيق. هل أنت متأكد؟')) return;
+                                    if (!context.mounted) return;
+                                    try {
+                                      final session = Scope.of(context);
+                                      await session.api.request('POST',
+                                          '/api/transactions/${e['id']}/void');
+                                      session.changed();
+                                      if (mounted) refresh();
+                                    } catch (error) {
+                                      if (context.mounted) message(context, error);
+                                    }
+                                  } : null,
                                   onConfirm: () async {
                                     if (await Receipts.confirmTransfer(
                                           context,

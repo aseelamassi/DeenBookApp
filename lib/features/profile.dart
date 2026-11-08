@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
 
 import '../core/format.dart';
 import '../core/session.dart';
@@ -89,7 +91,8 @@ class AccountHelp extends StatefulWidget {
 
 class _AccountHelpState extends State<AccountHelp> {
   int selected = 3, step = 0;
-  bool trial = true, passwordHidden = true;
+  bool trial = true, passwordHidden = true, busy = false;
+  String? error, receiptBase64, receiptContentType;
   final name = TextEditingController(),
       phone = TextEditingController(),
       owner = TextEditingController(),
@@ -104,6 +107,52 @@ class _AccountHelpState extends State<AccountHelp> {
     password.dispose();
     sender.dispose();
     super.dispose();
+  }
+
+  Future<void> submitRegistration() async {
+    if (busy) return;
+    if (!trial && sender.text.trim().isEmpty) {
+      setState(() => error = 'اسم صاحب الحوالة مطلوب');
+      return;
+    }
+    setState(() { busy = true; error = null; });
+    try {
+      final s = Scope.of(context);
+      final result = await s.api.registerShop({
+        'shopName': name.text.trim(),
+        'ownerName': owner.text.trim(),
+        'phoneNumber': phoneNumber(phone.text),
+        'password': password.text,
+        'freeTrial': trial,
+        'months': selected,
+        'senderName': trial ? null : sender.text.trim(),
+        'destination': 'bank',
+        'receiptImageBase64': receiptBase64,
+        'receiptContentType': receiptContentType,
+      });
+      if (!mounted) return;
+      if (trial) {
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => _TrialActivatedScreen(
+            start: '${result['trialStartedAt']}',
+            end: '${result['trialEndsAt']}',
+            phone: phoneNumber(phone.text)!,
+            password: password.text,
+          ),
+        ));
+      } else {
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => _PendingActivationPreview(
+            shop: name.text.trim(), owner: owner.text.trim(),
+            months: selected, sender: sender.text.trim(),
+          ),
+        ));
+      }
+    } catch (e) {
+      if (mounted) setState(() => error = '$e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
   }
 
   String get request => widget.reset
@@ -213,8 +262,8 @@ class _AccountHelpState extends State<AccountHelp> {
                                   icon: Icon(passwordHidden ? Icons.visibility_outlined : Icons.visibility_off_outlined),
                                 ),
                               ),
-                              validator: (v) => (v?.length ?? 0) < 8
-                                  ? 'كلمة المرور يجب أن تكون 8 أحرف على الأقل'
+                              validator: (v) => (v?.length ?? 0) < 12
+                                  ? 'استخدمي كلمة مرور من 12 حرفاً على الأقل'
                                   : null,
                             ),
                           ),
@@ -304,16 +353,23 @@ class _AccountHelpState extends State<AccountHelp> {
                   const SizedBox(height: 16),
                   if (trial) ...[
                     const _TrialInformation(),
-                    const SizedBox(height: 12),
-                    Text('بدء الفترة المجانية وتواريخها الفعلية يتطلبان إنشاء الحساب من الخادم؛ لا يبدأ احتسابها بمجرد عرض هذه الصفحة.', style: appText(11, color: secondaryText)),
                   ] else ...[
-                    _PaymentInstructions(sender: sender),
+                    _PaymentInstructions(sender: sender, onReceipt: (encoded, mime) {
+                      receiptBase64 = encoded;
+                      receiptContentType = mime;
+                    }),
                     const SizedBox(height: 12),
-                    Text('بعد التحويل وإرسال الطلب سيظل الاشتراك قيد المراجعة لحين تأكيد الإدارة. هذه الشاشة لا تثبت وصول التحويل.', style: appText(11, color: secondaryText)),
+                    Text('بعد تسجيل الطلب على الخادم يبقى قيد المراجعة حتى يؤكد الأدمن وصول الحوالة.', style: appText(11, color: secondaryText)),
                   ],
                 ],
                 const SizedBox(height: 24),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(error!, style: const TextStyle(color: Colors.red)),
+                  ),
                 BusyButton(
+                  busy: busy,
                   label: widget.reset || step == 2
                       ? (widget.reset ? 'طلب استعادة الحساب' : trial ? 'طلب بدء تجربة مجانية' : 'أرسلت التحويل — إرسال طلب التفعيل')
                       : 'متابعة ←',
@@ -322,13 +378,10 @@ class _AccountHelpState extends State<AccountHelp> {
                         !form.currentState!.validate()) {
                       return;
                     }
-                    if (widget.reset || step == 2) {
+                    if (widget.reset) {
                       await contact(context, request);
-                      if (mounted && !widget.reset && !trial) {
-                        Navigator.of(context).push(MaterialPageRoute<void>(
-                          builder: (_) => _PendingActivationPreview(shop: name.text.trim(), owner: owner.text.trim(), months: selected, sender: sender.text.trim()),
-                        ));
-                      }
+                    } else if (step == 2) {
+                      await submitRegistration();
                     } else {
                       setState(() => step++);
                     }
@@ -343,7 +396,7 @@ class _AccountHelpState extends State<AccountHelp> {
                 Text(
                   widget.reset
                       ? 'لن نطلب كلمة مرورك في رسالة.'
-                      : 'كلمة المرور لا تُرسل للإدارة أو عبر واتساب. تفعيل الحساب وربط العاملين يحتاجان دعم الخادم.',
+                      : 'كلمة المرور تحفظ في الخادم بصورة مشفّرة ولا تُرسل للإدارة أو واتساب.',
                   textAlign: TextAlign.center,
                   style: appText(11, color: muted),
                 ),
@@ -359,14 +412,33 @@ class _AccountHelpState extends State<AccountHelp> {
 /// Payment instructions matching the supplied reference. Only known bank
 /// details are shown; wallet destinations require configuration by backend.
 class _PaymentInstructions extends StatefulWidget {
-  const _PaymentInstructions({required this.sender});
+  const _PaymentInstructions({required this.sender, required this.onReceipt});
   final TextEditingController sender;
+  final void Function(String?, String?) onReceipt;
   @override
   State<_PaymentInstructions> createState() => _PaymentInstructionsState();
 }
 
 class _PaymentInstructionsState extends State<_PaymentInstructions> {
   int destination = 0;
+  String? chosenImage;
+  Future<void> chooseReceipt() async {
+    try {
+      final image = await ImagePicker().pickImage(
+        source: ImageSource.gallery, maxWidth: 1600, imageQuality: 75);
+      if (image == null) return;
+      final bytes = await image.readAsBytes();
+      if (bytes.length > 2 * 1024 * 1024) {
+        if (mounted) message(context, 'يجب ألا تتجاوز الصورة 2 ميجابايت');
+        return;
+      }
+      final mime = image.name.toLowerCase().endsWith('.png')
+        ? 'image/png' : 'image/jpeg';
+      if (!mounted) return;
+      widget.onReceipt(base64Encode(bytes), mime);
+      setState(() => chosenImage = image.name);
+    } catch (e) { if (mounted) message(context, '$e'); }
+  }
   @override
   Widget build(BuildContext context) => Surface(child: Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -377,7 +449,7 @@ class _PaymentInstructionsState extends State<_PaymentInstructions> {
       const SizedBox(height: 8),
       Wrap(spacing: 8, runSpacing: 8, children: [
         for (final (i, label) in [(0, 'بنك فلسطين'), (1, 'محفظتي PalPay'), (2, 'جوال بي')])
-          ChoiceChip(label: Text(label), selected: destination == i, onSelected: (_) => setState(() => destination = i)),
+          ChoiceChip(label: Text(label), selected: destination == i, onSelected: i == 0 ? (_) => setState(() => destination = i) : null),
       ]),
       const SizedBox(height: 12),
       if (destination == 0) ...[
@@ -391,7 +463,11 @@ class _PaymentInstructionsState extends State<_PaymentInstructions> {
       TextField(controller: widget.sender, decoration: const InputDecoration(hintText: 'اسم صاحب الحوالة')),
       const SizedBox(height: 8),
       Text('ثالثاً: صورة إشعار التحويل (اختياري)', style: appText(12, weight: FontWeight.w800)),
-      Text('رفع الصورة وإرسالها للإدارة يتطلب واجهة Backend للملفات. لا يتم رفع أي مستند من هذه النسخة.', style: appText(11, color: secondaryText)),
+      OutlinedButton.icon(onPressed: chooseReceipt,
+        icon: const Icon(Icons.add_photo_alternate_outlined),
+        label: Text(chosenImage == null ? 'إرفاق صورة إشعار التحويل' : 'تم اختيار الصورة · تغيير')),
+      if (chosenImage != null)
+        Text(chosenImage!, style: appText(11, color: secondaryText)),
     ],
   ));
   Widget _copyLine(BuildContext context, String title, String value) => Padding(
@@ -413,6 +489,42 @@ class _PaymentInstructionsState extends State<_PaymentInstructions> {
   );
 }
 
+class _TrialActivatedScreen extends StatelessWidget {
+  const _TrialActivatedScreen({required this.start, required this.end,
+    required this.phone, required this.password});
+  final String start, end, phone, password;
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('تم تفعيل التجربة المجانية')),
+    body: Width(child: ListView(padding: const EdgeInsets.all(20), children: [
+      const Icon(Icons.check_circle_outline_rounded, color: green, size: 74),
+      const SizedBox(height: 20),
+      Text('حساب محلك جاهز!', textAlign: TextAlign.center,
+        style: appText(25, weight: FontWeight.w900)),
+      const SizedBox(height: 12),
+      Text('يمكنك استخدام دفتر دين مجاناً لمدة 14 يوماً.',
+        textAlign: TextAlign.center),
+      const SizedBox(height: 18),
+      Surface(child: Column(children: [
+        Text('تاريخ البدء: ${start.split('T').first}'),
+        Text('تاريخ الانتهاء: ${end.split('T').first}'),
+      ])),
+      const SizedBox(height: 18),
+      BusyButton(label: 'البدء باستخدام التطبيق', onPressed: () async {
+        try {
+          await Scope.of(context).login(phone, password);
+        } catch (e) { if (context.mounted) message(context, '$e'); }
+      }),
+      const SizedBox(height: 12),
+      OutlinedButton(onPressed: () async {
+        try {
+          await Scope.of(context).loginForWorkerSetup(phone, password);
+        } catch (e) { if (context.mounted) message(context, '$e'); }
+      }, child: const Text('إضافة عاملين')),
+    ])),
+  );
+}
+
 class _TrialInformation extends StatelessWidget {
   const _TrialInformation();
   @override
@@ -422,8 +534,8 @@ class _TrialInformation extends StatelessWidget {
       Text('تجربة مجانية لمدة 14 يوماً', style: appText(18, weight: FontWeight.w900, color: green)),
       const Text('سيظهر تاريخ البداية والانتهاء فور تأكيد إنشاء الحساب من الخادم.'),
       const SizedBox(height: 10),
-      OutlinedButton.icon(onPressed: () => message(context, 'إضافة عاملين اثنين تتطلب تفعيل الحساب وربط العاملين من الخادم.'), icon: const Icon(Icons.people_outline), label: const Text('إضافة عاملين')),
-      OutlinedButton.icon(onPressed: () => message(context, 'بعد إنشاء الحساب وتفعيل التجربة من الخادم، سجّل الدخول برقم الجوال وكلمة المرور لبدء الاستخدام.'), icon: const Icon(Icons.login), label: const Text('البدء باستخدام التطبيق')),
+      Text('بعد إنشاء الحساب ستظهر صفحة التأكيد مع زري البدء وإضافة العاملين.',
+        style: appText(11, color: secondaryText)),
     ],
   ));
 }
@@ -441,7 +553,7 @@ class _PendingActivationPreview extends StatelessWidget {
       const SizedBox(height: 16),
       Text('طلب اشتراك قيد المراجعة', textAlign: TextAlign.center, style: appText(23, weight: FontWeight.w900)),
       const SizedBox(height: 10),
-      Text('هذه معاينة لحالة قيد التفعيل. لم يتم التأكد من إرسال الطلب أو وصول الحوالة إلى الخادم بعد. تظهر الحالة الرسمية بعد ربط واجهة التسجيل بالـ Backend.', textAlign: TextAlign.center, style: appText(12, color: secondaryText)),
+      Text('تم حفظ طلبك على الخادم، لكن لم يتم تأكيد وصول الحوالة بعد. ستفعّل إدارة الخدمة اشتراكك بعد التحقق.', textAlign: TextAlign.center, style: appText(12, color: secondaryText)),
       const SizedBox(height: 20),
       Surface(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('المحل: $shop'),
@@ -466,6 +578,42 @@ class SubscriptionScreen extends StatefulWidget {
 class _SubscriptionScreenState extends State<SubscriptionScreen> {
   int selected = 3;
   bool busy = false;
+  String? activationStatus, receiptBase64, receiptContentType;
+  final sender = TextEditingController();
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => loadActivation());
+  }
+  @override
+  void dispose() { sender.dispose(); super.dispose(); }
+  Future<void> loadActivation() async {
+    try {
+      final result = await Scope.of(context).api.get('/api/subscription/activation');
+      if (mounted) setState(() => activationStatus = (result['request'] as Map?)?['status'] as String?);
+    } catch (_) { /* Works with older deployed APIs, which have no request status. */ }
+  }
+  Future<void> requestRenewal() async {
+    if (busy) return;
+    if (sender.text.trim().isEmpty) {
+      message(context, 'اسم صاحب الحوالة مطلوب');
+      return;
+    }
+    setState(() => busy = true);
+    try {
+      final session = Scope.of(context);
+      await session.api.request('POST', '/api/subscription/activation-request', body: {
+        'months': selected,
+        'senderName': sender.text.trim(),
+        'destination': 'bank',
+        'receiptImageBase64': receiptBase64,
+        'receiptContentType': receiptContentType,
+      });
+      await loadActivation();
+      if (mounted) message(context, 'تم تسجيل طلب الاشتراك، بانتظار موافقة الإدارة');
+    } catch (e) { if (mounted) message(context, e); }
+    finally { if (mounted) setState(() => busy = false); }
+  }
   @override
   Widget build(BuildContext context) {
     final s = Scope.of(context);
@@ -518,28 +666,21 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
               select: (v) => setState(() => selected = v),
             ),
             const SizedBox(height: 20),
-            BusyButton(
-              label: hasSupportContact
-                  ? 'متابعة التجديد عبر واتساب'
-                  : 'عرض طلب التجديد',
-              onPressed: () => contact(
-                context,
-                subscriptionRequestText(
-                  shopName: s.shopName,
-                  months: selected,
-                  phone: s.settings?['phone'] as String?,
-                  renewal: true,
-                ),
-              ),
-            ),
+            _PaymentInstructions(sender: sender, onReceipt: (encoded, mime) {
+                      receiptBase64 = encoded;
+                      receiptContentType = mime;
+                    }),
             const SizedBox(height: 12),
-            Text(
-              hasSupportContact
-                  ? 'أرسل الرسالة من واتساب لإكمال الطلب. تأكيد الدفع والتفعيل يتمان من الإدارة.'
-                  : 'لم يُرسل أي طلب. التواصل من التطبيق غير متاح حالياً؛ يمكنك عرض التفاصيل ونسخها.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: muted, fontSize: 12),
-            ),
+            if (activationStatus == 'Pending')
+              const SoftTag('طلب التحويل قيد المراجعة لدى الإدارة')
+            else ...[
+              BusyButton(label: 'أرسلت التحويل — إرسال طلب التفعيل',
+                busy: busy, onPressed: requestRenewal),
+              const SizedBox(height: 10),
+              Text('لن يتفعّل الاشتراك إلا بعد اعتماد الحوالة من لوحة الإدارة.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: muted, fontSize: 12)),
+            ],
             const SizedBox(height: 20),
             OutlinedButton.icon(
               onPressed: busy
@@ -570,86 +711,96 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   }
 }
 
-class WorkersScreen extends StatelessWidget {
+class WorkersScreen extends StatefulWidget {
   const WorkersScreen({super.key});
+  @override
+  State<WorkersScreen> createState() => _WorkersScreenState();
+}
+
+class _WorkersScreenState extends State<WorkersScreen> {
+  List<dynamic> workers = [];
+  bool loading = true, saving = false;
+  String? error;
+  final phone = TextEditingController();
+  final password = TextEditingController();
+  bool initialized = false;
+  @override
+  void didChangeDependencies() { super.didChangeDependencies(); if (!initialized) { initialized = true; load(); } }
+  @override
+  void dispose() { phone.dispose(); password.dispose(); super.dispose(); }
+  Future<void> load() async {
+    try {
+      final result = await Scope.of(context).api.get('/api/workers');
+      if (mounted) setState(() { workers = (result['workers'] as List?) ?? []; loading = false; error = null; });
+    } catch (e) { if (mounted) setState(() { loading = false; error = '$e'; }); }
+  }
+  Future<void> add() async {
+    if (saving || workers.length >= 2) return;
+    final normalized = phoneNumber(phone.text);
+    if (normalized == null || password.text.length < 12) {
+      message(context, 'أدخل رقم جوال صحيحاً وكلمة مرور من 12 حرفاً على الأقل');
+      return;
+    }
+    setState(() => saving = true);
+    try {
+      await Scope.of(context).api.request('POST', '/api/workers',
+        body: {'phoneNumber': normalized, 'password': password.text});
+      phone.clear(); password.clear();
+      await load();
+      if (mounted) message(context, 'تمت إضافة العامل بنجاح');
+    } catch (e) { if (mounted) message(context, '$e'); }
+    finally { if (mounted) setState(() => saving = false); }
+  }
+  Future<void> disable(String id) async {
+    try {
+      await Scope.of(context).api.request('DELETE', '/api/workers/$id');
+      await load();
+    } catch (e) { if (mounted) message(context, '$e'); }
+  }
   @override
   Widget build(BuildContext context) {
     final s = Scope.of(context);
-    return Scaffold(
-      appBar: AppBar(title: const Text('العاملون والصلاحيات')),
-      body: Width(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            BrandCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'فريق المحل',
-                    style: appText(
-                      18,
-                      color: Colors.white,
-                      weight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'حسابات العاملين مرتبطة بدفتر المحل نفسه.',
-                    style: appText(11, color: Colors.white70),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 18),
-            Surface(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: lavender,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: const Icon(Icons.person_outline, color: navy),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${s.settings?['ownerName'] ?? 'صاحب المحل'}',
-                          style: appText(14, weight: FontWeight.w900),
-                        ),
-                        Text(s.shopName, style: appText(11, color: muted)),
-                        const SizedBox(height: 8),
-                        const SoftTag('صاحب المحل · صلاحيات الإدارة'),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Surface(child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('العاملون · حتى عاملين اثنين', style: appText(15, weight: FontWeight.w900)),
-                const SizedBox(height: 8),
-                Text('يحتاج كل عامل لحساب مستقل مرتبط بالمحل وصلاحيات يحددها المالك، مع مزامنة الحركات على جميع الأجهزة.', style: appText(12, color: secondaryText)),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: () => message(context, 'يلزم دعم إنشاء حسابات العاملين وصلاحياتهم من Backend قبل تفعيل الإضافة.'),
-                  icon: const Icon(Icons.person_add_alt_1_outlined),
-                  label: const Text('إضافة عامل (تحتاج تفعيل الخدمة)'),
-                ),
-              ],
-            )),
+    return Scaffold(appBar: AppBar(title: const Text('العاملون والصلاحيات'),
+        leading: s.workerSetup ? IconButton(
+          tooltip: 'بدء استخدام التطبيق',
+          onPressed: s.finishWorkerSetup,
+          icon: const Icon(Icons.arrow_back)) : null),
+      body: Width(child: ListView(padding: const EdgeInsets.all(16), children: [
+        BrandCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('فريق المحل', style: appText(19, color: Colors.white, weight: FontWeight.w900)),
+          Text(s.shopName, style: appText(12, color: Colors.white70)),
+        ])),
+        const SizedBox(height: 14),
+        if (loading) const Center(child: CircularProgressIndicator()),
+        if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
+        for (final entry in workers)
+          Surface(child: Row(children: [
+            const Icon(Icons.person_outline, color: navy),
+            const SizedBox(width: 12),
+            Expanded(child: Text('${entry['phoneNumber']}', style: appText(13))),
+            if (entry['enabled'] == true)
+              TextButton(onPressed: () => disable('${entry['id']}'),
+                child: const Text('تعطيل'))
+            else const SoftTag('معطل'),
+          ])),
+        if (workers.length < 2) Surface(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Text('إضافة عامل (${workers.length}/2)',
+              style: appText(16, weight: FontWeight.w900)),
+            const SizedBox(height: 12),
+            TextField(controller: phone, keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'رقم جوال العامل')),
+            const SizedBox(height: 12),
+            TextField(controller: password, obscureText: true,
+              decoration: const InputDecoration(labelText: 'كلمة مرور العامل · 12 حرفاً أو أكثر')),
+            const SizedBox(height: 12),
+            BusyButton(label: 'إضافة عامل', busy: saving, onPressed: add),
           ],
-        ),
-      ),
+        )),
+        const SizedBox(height: 10),
+        Text('يسجل العامل الدخول من جهازه برقم الجوال وكلمة مروره، وتُحفظ الحركات في دفتر المحل نفسه.',
+          style: appText(11, color: secondaryText)),
+      ])),
     );
   }
 }

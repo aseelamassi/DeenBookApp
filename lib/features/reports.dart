@@ -41,8 +41,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final r = await Future.wait([
       api.get('/api/reports/summary', query: q),
       api.get('/api/reports/cashflow', query: q),
+      api.get('/api/reports/purchases', query: q),
     ]);
-    return {'summary': r[0], 'cash': r[1]};
+    return {'summary': r[0], 'cash': r[1], 'purchases': r[2]};
   }
 
   void selectPeriod(String value) {
@@ -280,6 +281,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
                             'انتبه',
                             'هذه الأرصدة حتى الآن، مهما كانت الفترة المحددة فوق.',
                           ),
+                        ],
+                      ),
+                    ),
+                    Surface(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Heading('4. تفاصيل المشتريات ومن استلمها'),
+                          ...((s.data!['purchases']['items'] as List).take(40).map((row) {
+                            final e = row['entry'] as Map;
+                            final lines = (e['items'] as List? ?? []);
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text('${row['partyName']} · ${money(e['amount'])}',
+                                  style: appText(12, weight: FontWeight.w800)),
+                              subtitle: Text([
+                                day(e['occurredAt']),
+                                if ('${e['counterpartyName'] ?? ''}'.trim().isNotEmpty)
+                                  'اللي إجا اشترى: ${e['counterpartyName']}',
+                                if (lines.isNotEmpty)
+                                  'الأصناف: ${lines.map((x) => '${x['name']} × ${x['quantity']} ${x['unit']}').join('، ')}',
+                                if ('${e['note'] ?? ''}'.trim().isNotEmpty) '${e['note']}',
+                              ].join(' · ')),
+                            );
+                          })),
+                          if ((s.data!['purchases']['items'] as List).length > 40)
+                            const Text('باقي الحركات موجودة في نسخة التقرير المطبوعة.'),
+                          if (s.data!['purchases']['truncated'] == true)
+                            const Text('تنبيه: التقرير تجاوز 5000 حركة؛ ضيّق الفترة لضمان عرض جميع التفاصيل.'),
                         ],
                       ),
                     ),

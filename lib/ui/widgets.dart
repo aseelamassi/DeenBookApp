@@ -306,7 +306,7 @@ Widget entryTile(Json e, {String? name, VoidCallback? onConfirm, VoidCallback? o
           Text('${e['note']}', style: appText(11, color: secondaryText)),
         if ((e['counterpartyName'] ?? '').toString().isNotEmpty)
           Text(
-            '${e['kind'] == 'Payment' ? 'الدافع / المستلم' : 'مستلم البضاعة'}: ${e['counterpartyName']}',
+            '${e['kind'] == 'Payment' && e['method'] != 'Cash' ? 'اسم صاحب الحوالة' : e['kind'] == 'Payment' ? 'الدافع / المستلم' : 'مستلم البضاعة'}: ${e['counterpartyName']}',
             style: const TextStyle(fontSize: 12),
           ),
         for (final p in (e['items'] as List? ?? []))

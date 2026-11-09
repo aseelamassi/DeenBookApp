@@ -12,6 +12,16 @@ import '../ui/design.dart';
 import 'sync_center.dart';
 import '../ui/widgets.dart';
 
+// API values agreed with the existing Registration and Subscription endpoints.
+const _paymentDestinationLabels = <String, String>{
+  'bank': 'بنك فلسطين',
+  'palpay': 'محفظة PalPay',
+  'jawwal': 'جوال بي',
+};
+
+String _paymentDestinationLabel(String destination) =>
+    _paymentDestinationLabels[destination] ?? 'بنك فلسطين';
+
 class Plans extends StatelessWidget {
   const Plans({super.key, required this.selected, required this.select});
   final int selected;
@@ -91,6 +101,7 @@ class AccountHelp extends StatefulWidget {
 
 class _AccountHelpState extends State<AccountHelp> {
   int selected = 3, step = 0;
+  String paymentDestination = 'bank';
   bool trial = true, passwordHidden = true, busy = false;
   String? error, receiptBase64, receiptContentType;
   final name = TextEditingController(),
@@ -126,7 +137,7 @@ class _AccountHelpState extends State<AccountHelp> {
         'freeTrial': trial,
         'months': selected,
         'senderName': trial ? null : sender.text.trim(),
-        'destination': 'bank',
+        'destination': paymentDestination,
         'receiptImageBase64': receiptBase64,
         'receiptContentType': receiptContentType,
       });
@@ -145,6 +156,7 @@ class _AccountHelpState extends State<AccountHelp> {
           builder: (_) => _PendingActivationPreview(
             shop: name.text.trim(), owner: owner.text.trim(),
             months: selected, sender: sender.text.trim(),
+            destination: paymentDestination,
           ),
         ));
       }
@@ -222,7 +234,7 @@ class _AccountHelpState extends State<AccountHelp> {
                   widget.reset
                       ? 'نساعدك ترجع لحسابك'
                       : [
-                          'خلّينا نتعرّف على محلك',
+                          'افتح دفتر محلك الإلكتروني في دقيقة',
                           'ابدأ بالطريقة التي تناسبك',
                           'تحويل رسوم الاشتراك وتفعيل المحل',
                         ][step],
@@ -249,6 +261,14 @@ class _AccountHelpState extends State<AccountHelp> {
                           field(owner, 'اسم صاحب المحل', required: true),
                           field(name, 'اسم المحل', required: true),
                         ],
+                        field(
+                          phone,
+                          'رقم الجوال',
+                          keyboard: TextInputType.phone,
+                          validator: (v) => phoneNumber(v ?? '') == null
+                              ? 'أدخل رقم جوال صحيحاً'
+                              : null,
+                        ),
                         if (!widget.reset)
                           Padding(
                             padding: const EdgeInsets.only(bottom: 16),
@@ -267,14 +287,6 @@ class _AccountHelpState extends State<AccountHelp> {
                                   : null,
                             ),
                           ),
-                        field(
-                          phone,
-                          'رقم الجوال',
-                          keyboard: TextInputType.phone,
-                          validator: (v) => phoneNumber(v ?? '') == null
-                              ? 'أدخل رقم جوال صحيحاً'
-                              : null,
-                        ),
                       ],
                     ),
                   ),
@@ -354,10 +366,15 @@ class _AccountHelpState extends State<AccountHelp> {
                   if (trial) ...[
                     const _TrialInformation(),
                   ] else ...[
-                    _PaymentInstructions(sender: sender, onReceipt: (encoded, mime) {
-                      receiptBase64 = encoded;
-                      receiptContentType = mime;
-                    }),
+                    _PaymentInstructions(
+                      sender: sender,
+                      destination: paymentDestination,
+                      onDestinationChanged: (value) => setState(() => paymentDestination = value),
+                      onReceipt: (encoded, mime) {
+                        receiptBase64 = encoded;
+                        receiptContentType = mime;
+                      },
+                    ),
                     const SizedBox(height: 12),
                     Text('بعد تسجيل الطلب على الخادم يبقى قيد المراجعة حتى يؤكد الأدمن وصول الحوالة.', style: appText(11, color: secondaryText)),
                   ],
@@ -409,19 +426,27 @@ class _AccountHelpState extends State<AccountHelp> {
   );
 }
 
-/// Payment instructions matching the supplied reference. Only known bank
-/// details are shown; wallet destinations require configuration by backend.
+/// Payment details from the supplied merchant screenshot; destination codes
+/// match the existing Backend API values. The payee stays visible on selection.
 class _PaymentInstructions extends StatefulWidget {
-  const _PaymentInstructions({required this.sender, required this.onReceipt});
+  const _PaymentInstructions({
+    required this.sender,
+    required this.destination,
+    required this.onDestinationChanged,
+    required this.onReceipt,
+  });
   final TextEditingController sender;
+  final String destination;
+  final ValueChanged<String> onDestinationChanged;
   final void Function(String?, String?) onReceipt;
+
   @override
   State<_PaymentInstructions> createState() => _PaymentInstructionsState();
 }
 
 class _PaymentInstructionsState extends State<_PaymentInstructions> {
-  int destination = 0;
   String? chosenImage;
+
   Future<void> chooseReceipt() async {
     try {
       final image = await ImagePicker().pickImage(
@@ -433,60 +458,133 @@ class _PaymentInstructionsState extends State<_PaymentInstructions> {
         return;
       }
       final mime = image.name.toLowerCase().endsWith('.png')
-        ? 'image/png' : 'image/jpeg';
+          ? 'image/png' : 'image/jpeg';
       if (!mounted) return;
       widget.onReceipt(base64Encode(bytes), mime);
       setState(() => chosenImage = image.name);
-    } catch (e) { if (mounted) message(context, '$e'); }
+    } catch (e) {
+      if (mounted) message(context, '$e');
+    }
   }
+
   @override
-  Widget build(BuildContext context) => Surface(child: Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Text('تحويل رسوم الاشتراك وتفعيل المحل', style: appText(17, weight: FontWeight.w900)),
-      const SizedBox(height: 8),
-      Text('أولاً: اختر وجهة التحويل', style: appText(13, weight: FontWeight.w800)),
-      const SizedBox(height: 8),
-      Wrap(spacing: 8, runSpacing: 8, children: [
-        for (final (i, label) in [(0, 'بنك فلسطين'), (1, 'محفظتي PalPay'), (2, 'جوال بي')])
-          ChoiceChip(label: Text(label), selected: destination == i, onSelected: i == 0 ? (_) => setState(() => destination = i) : null),
-      ]),
-      const SizedBox(height: 12),
-      if (destination == 0) ...[
-        _copyLine(context, 'صاحب الحساب المستلم', 'لؤي محمد أبو زعنونة'),
-        _copyLine(context, 'رقم الجوال', '0594301646'),
-        _copyLine(context, 'IBAN', 'PS92PALS045310978160993000000'),
-      ] else
-        Text('لم تُضف الإدارة بيانات التحويل لهذه المحفظة بعد. اختر بنك فلسطين أو تواصل مع الإدارة.', style: appText(12, color: secondaryText)),
-      const SizedBox(height: 14),
-      Text('ثانياً: اسم المرسل (صاحب الحساب المحوّل)', style: appText(12, weight: FontWeight.w800)),
-      TextField(controller: widget.sender, decoration: const InputDecoration(hintText: 'اسم صاحب الحوالة')),
-      const SizedBox(height: 8),
-      Text('ثالثاً: صورة إشعار التحويل (اختياري)', style: appText(12, weight: FontWeight.w800)),
-      OutlinedButton.icon(onPressed: chooseReceipt,
-        icon: const Icon(Icons.add_photo_alternate_outlined),
-        label: Text(chosenImage == null ? 'إرفاق صورة إشعار التحويل' : 'تم اختيار الصورة · تغيير')),
-      if (chosenImage != null)
-        Text(chosenImage!, style: appText(11, color: secondaryText)),
-    ],
-  ));
-  Widget _copyLine(BuildContext context, String title, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 5),
-    child: Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: lavender, borderRadius: BorderRadius.circular(12)),
-      child: Row(children: [
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: appText(11, color: secondaryText)),
-          SelectableText(value, textDirection: title == 'صاحب الحساب المستلم' ? TextDirection.rtl : TextDirection.ltr, style: appText(12, weight: FontWeight.w900)),
-        ])),
-        IconButton(tooltip: 'نسخ $title', onPressed: () async {
-          await Clipboard.setData(ClipboardData(text: value));
-          if (context.mounted) message(context, 'تم النسخ');
-        }, icon: const Icon(Icons.copy_outlined)),
-      ]),
+  Widget build(BuildContext context) => Surface(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('تحويل رسوم الاشتراك وتفعيل المحل',
+            style: appText(17, weight: FontWeight.w900)),
+        const SizedBox(height: 8),
+        Text('أولاً: اختر وجهة التحويل',
+            style: appText(13, weight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final method in _paymentDestinationLabels.entries)
+              ChoiceChip(
+                label: Text(method.value),
+                selected: widget.destination == method.key,
+                onSelected: (_) => widget.onDestinationChanged(method.key),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: lavender,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: lineColor),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('بيانات صاحب التطبيق لاستلام رسوم الاشتراك',
+                  style: appText(13, weight: FontWeight.w900)),
+              const SizedBox(height: 6),
+              _copyLine(context, 'اسم صاحب الحساب المستلم', 'لؤي محمد أبو زعنونة'),
+              _copyLine(context, 'رقم الجوال (بنك فلسطين، PalPay، جوال بي)', '0594301646'),
+              _copyLine(context, 'آيبان بنك فلسطين (للتحويل البنكي فقط)',
+                  'PS92PALS045310978160993000000'),
+              const SizedBox(height: 6),
+              Text(
+                widget.destination == 'bank'
+                    ? 'استخدمي بيانات بنك فلسطين للتحويل البنكي.'
+                    : 'للتحويل عبر ${_paymentDestinationLabel(widget.destination)} استخدمي رقم الجوال الظاهر أعلاه، وتحققي من اسم المستلم في خدمة التحويل قبل الإرسال.',
+                style: appText(11, color: secondaryText),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text('ثانياً: اسم صاحب الحوالة',
+            style: appText(12, weight: FontWeight.w800)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: widget.sender,
+          textInputAction: TextInputAction.next,
+          decoration: const InputDecoration(
+            labelText: 'اسم صاحب الحوالة',
+            hintText: 'اكتب الاسم كما يظهر في التحويل',
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text('ستُرسل وجهة التحويل واسم صاحبه إلى لوحة الإدارة للتحقق من الحوالة يدوياً.',
+            style: appText(11, color: secondaryText)),
+        const SizedBox(height: 12),
+        Text('ثالثاً: صورة إشعار التحويل (اختياري)',
+            style: appText(12, weight: FontWeight.w800)),
+        OutlinedButton.icon(
+          onPressed: chooseReceipt,
+          icon: const Icon(Icons.add_photo_alternate_outlined),
+          label: Text(chosenImage == null
+              ? 'إرفاق صورة إشعار التحويل' : 'تم اختيار الصورة · تغيير'),
+        ),
+        if (chosenImage != null)
+          Text(chosenImage!, style: appText(11, color: secondaryText)),
+      ],
     ),
   );
+
+  Widget _copyLine(BuildContext context, String title, String value) =>
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: appText(11, color: secondaryText)),
+                    SelectableText(
+                      value,
+                      textDirection: value.startsWith('PS') || value.startsWith('05')
+                          ? TextDirection.ltr : TextDirection.rtl,
+                      style: appText(12, weight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'نسخ $title',
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: value));
+                  if (context.mounted) message(context, 'تم النسخ');
+                },
+                icon: const Icon(Icons.copy_outlined),
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 class _TrialActivatedScreen extends StatelessWidget {
@@ -542,8 +640,9 @@ class _TrialInformation extends StatelessWidget {
 
 /// Status preview; never claim that the server received or approved payment.
 class _PendingActivationPreview extends StatelessWidget {
-  const _PendingActivationPreview({required this.shop, required this.owner, required this.months, required this.sender});
-  final String shop, owner, sender;
+  const _PendingActivationPreview({required this.shop, required this.owner,
+    required this.months, required this.sender, required this.destination});
+  final String shop, owner, sender, destination;
   final int months;
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -559,7 +658,8 @@ class _PendingActivationPreview extends StatelessWidget {
         Text('المحل: $shop'),
         Text('المالك: $owner'),
         Text('الخطة: ${months == 1 ? 'شهر · 60 ₪' : '3 أشهر · 150 ₪'}'),
-        if (sender.isNotEmpty) Text('اسم المرسل: $sender'),
+        Text('وجهة التحويل: ${_paymentDestinationLabel(destination)}'),
+        if (sender.isNotEmpty) Text('اسم صاحب الحوالة: $sender'),
         const SizedBox(height: 10),
         const SoftTag('بانتظار التحقق من إدارة الخدمة'),
       ])),
@@ -577,6 +677,7 @@ class SubscriptionScreen extends StatefulWidget {
 
 class _SubscriptionScreenState extends State<SubscriptionScreen> {
   int selected = 3;
+  String paymentDestination = 'bank';
   bool busy = false;
   String? activationStatus, receiptBase64, receiptContentType;
   final sender = TextEditingController();
@@ -605,7 +706,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
       await session.api.request('POST', '/api/subscription/activation-request', body: {
         'months': selected,
         'senderName': sender.text.trim(),
-        'destination': 'bank',
+        'destination': paymentDestination,
         'receiptImageBase64': receiptBase64,
         'receiptContentType': receiptContentType,
       });
@@ -666,10 +767,15 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
               select: (v) => setState(() => selected = v),
             ),
             const SizedBox(height: 20),
-            _PaymentInstructions(sender: sender, onReceipt: (encoded, mime) {
-                      receiptBase64 = encoded;
-                      receiptContentType = mime;
-                    }),
+            _PaymentInstructions(
+              sender: sender,
+              destination: paymentDestination,
+              onDestinationChanged: (value) => setState(() => paymentDestination = value),
+              onReceipt: (encoded, mime) {
+                receiptBase64 = encoded;
+                receiptContentType = mime;
+              },
+            ),
             const SizedBox(height: 12),
             if (activationStatus == 'Pending')
               const SoftTag('طلب التحويل قيد المراجعة لدى الإدارة')

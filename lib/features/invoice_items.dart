@@ -20,7 +20,14 @@ class InvoiceItems extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Heading('أصناف الفاتورة'),
+        Heading(purchase ? 'أصناف البضاعة المستلمة وأسعارها' : 'أصناف الفاتورة'),
+        Text(
+          purchase
+              ? 'أدخل الأصناف والكميات وسعر كل صنف. يمكنك الضغط على الصنف لتعديل الكمية بسرعة.'
+              : 'أدخل الأصناف والكميات وسعر كل صنف داخل الفاتورة.',
+          style: const TextStyle(fontSize: 12),
+        ),
+        const SizedBox(height: 8),
         for (var i = 0; i < lines.length; i++)
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -49,7 +56,7 @@ class InvoiceItems extends StatelessWidget {
           ),
         OutlinedButton.icon(
           icon: const Icon(Icons.add),
-          label: const Text('إضافة صنف'),
+          label: Text(purchase ? 'إضافة صنف آخر للفاتورة' : 'إضافة صنف'),
           onPressed: () async {
             if (lines.length >= 100) {
               message(context, 'الحد الأقصى 100 صنف في الفاتورة.');
@@ -78,9 +85,11 @@ class InvoiceItems extends StatelessWidget {
             }
           },
         ),
-        const Text(
-          'يُحفظ السعر مع الفاتورة. تعديل سعر الصنف لاحقاً لا يغيّرها.',
-          style: TextStyle(fontSize: 12),
+        Text(
+          purchase
+              ? 'يُحفظ سعر الشراء مع فاتورة المورد. تعديل سعر الصنف لاحقاً لا يغيّر الفاتورة المحفوظة.'
+              : 'يُحفظ السعر مع الفاتورة. تعديل سعر الصنف لاحقاً لا يغيّرها.',
+          style: const TextStyle(fontSize: 12),
         ),
       ],
     ),

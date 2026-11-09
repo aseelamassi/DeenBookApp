@@ -74,7 +74,10 @@ String entryDescription(Json e) => [
   if (e['pendingConfirmation'] == true) 'بانتظار وصول الحوالة — لم تُحتسب دفعة',
   if (e['method'] != 'Cash' && (e['reference'] ?? '').toString().isNotEmpty)
     'اسم المحوِّل: ${e['reference']}',
-  if ((e['counterpartyName'] ?? '').toString().isNotEmpty)
+  if ((e['counterpartyName'] ?? '').toString().isNotEmpty &&
+      !((e['kind'] == 'Payment') &&
+        e['method'] != 'Cash' &&
+        e['counterpartyName'] == e['reference']))
     'المستلم / الدافع: ${e['counterpartyName']}',
   if (amountCents(e['discount']) > 0) 'خصم: ${money(e['discount'])}',
   if ((e['note'] ?? '').toString().isNotEmpty) '${e['note']}',

@@ -238,6 +238,159 @@ void main() {
       expect(t.takeException(), isNull);
     },
   );
+  testWidgets('debt entry records timestamp on save and shows voice in header',
+      (t) async {
+    size(t);
+    Json? sent;
+    final s = (await t.runAsync(
+      () => fakeSession(
+        override: (r) {
+          if (r.path == '/api/transactions' && r.method == 'POST') {
+            sent = Map<String, dynamic>.from(r.data);
+            return response({...entry(), ...sent!});
+          }
+          return null;
+        },
+      ),
+    ))!;
+    await t.pumpWidget(wrap(s, TransactionScreen(party: party())));
+    await t.pumpAndSettle();
+
+    expect(find.byKey(const Key('debt-description-microphone')),
+        findsOneWidget);
+    expect(find.byTooltip('تغيير التاريخ'), findsNothing);
+    expect(find.widgetWithText(OutlinedButton, 'إملاء وصف الحركة'),
+        findsNothing);
+    expect(find.textContaining('التاريخ والوقت تلقائيًا'), findsOneWidget);
+
+    await enter(t, 'المبلغ — شيكل', '15');
+    await t.enterText(
+      find.widgetWithText(TextFormField, 'وصف الحركة (اختياري)'),
+      'علبة حليب',
+    );
+    final before = DateTime.now().toUtc();
+    await tap(t, 'تأكيد وحفظ المشتريات في دفتر دين ✓');
+    final after = DateTime.now().toUtc();
+    expect(sent, isNotNull);
+    expect(sent!['note'], 'علبة حليب');
+    final savedAt = DateTime.parse(sent!['occurredAt'] as String).toUtc();
+    expect(savedAt.isBefore(before.subtract(const Duration(seconds: 2))),
+        isFalse);
+    expect(savedAt.isAfter(after.add(const Duration(seconds: 2))), isFalse);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('customer payment searches in-place, saves sender and automatic time', (t) async {
+    size(t);
+    Json? sent;
+    final s = (await t.runAsync(
+      () => fakeSession(
+        populated: true,
+        override: (r) {
+          if (r.path == '/api/transactions' && r.method == 'POST') {
+            sent = Map<String, dynamic>.from(r.data);
+            return response({...entry(), ...sent!});
+          }
+          return null;
+        },
+      ),
+    ))!;
+    await t.pumpWidget(wrap(s, const TransactionScreen(kind: 'Payment')));
+    await t.pumpAndSettle();
+
+    // The customer-only payment form contains no supplier toggle and no
+    // navigation into the customer catalog to pick a customer.
+    expect(find.text('زبون'), findsNothing);
+    expect(find.text('مورد'), findsNothing);
+    expect(find.byKey(const Key('transaction-party-search')), findsOneWidget);
+    expect(find.byTooltip('تغيير التاريخ'), findsNothing);
+    expect(find.byKey(const Key('payment-description-microphone')),
+        findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'إملاء وصف الحركة'),
+        findsNothing);
+    expect(find.textContaining('التاريخ والوقت تلقائيًا'), findsOneWidget);
+    expect(find.text('اسم الدافع / المستلم (اختياري):'), findsNothing);
+    expect(find.byType(Navigator), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('transaction-party-search')));
+    await t.pump(const Duration(milliseconds: 240));
+    await t.pumpAndSettle();
+    await t.enterText(find.byKey(const Key('transaction-party-search')), 'أحمد');
+    await t.pump(const Duration(milliseconds: 240));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const ValueKey('party-option-customer-1')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('تم اختيار الزبون'), findsOneWidget);
+    expect(find.byType(Navigator), findsOneWidget);
+
+    await enter(t, 'المبلغ — شيكل', '25');
+    await tap(t, 'تحويل بنكي');
+    final sender = find.widgetWithText(
+      TextFormField, 'اسم صاحب الحوالة (اختياري)');
+    expect(sender, findsOneWidget);
+    expect(find.text('اسم الدافع / المستلم (اختياري):'), findsNothing);
+    await t.enterText(sender, 'سارة أحمد');
+    await t.enterText(
+      find.widgetWithText(TextFormField, 'وصف الحركة (اختياري)'),
+      'دفعة من حوالة بنكية',
+    );
+    final before = DateTime.now().toUtc();
+    await tap(t, 'تأكيد وحفظ الدفعة في دفتر دين ✓');
+    final after = DateTime.now().toUtc();
+    expect(sent!['partyId'], 'customer-1');
+    expect(sent!['method'], 'Bank');
+    expect(sent!['counterpartyName'], 'سارة أحمد');
+    expect(sent!['reference'], 'سارة أحمد');
+    expect(sent!['note'], 'دفعة من حوالة بنكية');
+    final savedAt = DateTime.parse(sent!['occurredAt'] as String).toUtc();
+    expect(savedAt.isBefore(before.subtract(const Duration(seconds: 2))), isFalse);
+    expect(savedAt.isAfter(after.add(const Duration(seconds: 2))), isFalse);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('sender input is conditional, optional, and works for both wallets', (t) async {
+    size(t);
+    Json? sent;
+    final s = (await t.runAsync(() => fakeSession(
+      override: (r) {
+        if (r.path == '/api/transactions' && r.method == 'POST') {
+          sent = Map<String, dynamic>.from(r.data);
+          return response({...entry(), ...sent!});
+        }
+        return null;
+      },
+    )))!;
+    await t.pumpWidget(wrap(s, TransactionScreen(kind: 'Payment', party: party())));
+    await t.pumpAndSettle();
+    expect(find.text('اسم صاحب الحوالة (اختياري)'), findsNothing);
+    await enter(t, 'المبلغ — شيكل', '10');
+    await tap(t, 'جوال باي');
+    expect(find.widgetWithText(TextFormField, 'اسم صاحب الحوالة (اختياري)'), findsOneWidget);
+    await tap(t, 'بال باي');
+    expect(find.widgetWithText(TextFormField, 'اسم صاحب الحوالة (اختياري)'), findsOneWidget);
+    await tap(t, 'نقداً');
+    expect(find.text('اسم صاحب الحوالة (اختياري)'), findsNothing);
+    await tap(t, 'بال باي');
+    // The payer field is optional: saving without it must still succeed.
+    await tap(t, 'تأكيد وحفظ الدفعة في دفتر دين ✓');
+    expect(sent!['method'], 'PalPay');
+    expect(sent!['reference'], '');
+    expect(sent!['counterpartyName'], '');
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('supplier settlement remains a separate flow without the customer microphone', (t) async {
+    size(t);
+    final s = (await t.runAsync(() => fakeSession()))!;
+    await t.pumpWidget(wrap(s, TransactionScreen(
+      kind: 'Payment', supplier: true, party: party(supplier: true))));
+    await t.pumpAndSettle();
+    expect(find.text('سداد دفعة لمورد'), findsOneWidget);
+    expect(find.byKey(const Key('payment-description-microphone')), findsNothing);
+    expect(find.byTooltip('تغيير التاريخ'), findsOneWidget);
+    expect(t.takeException(), isNull);
+  });
+
   testWidgets('legacy API does not receive unsupported invoice fields', (
     t,
   ) async {

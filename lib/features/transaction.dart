@@ -5,8 +5,10 @@ import 'package:uuid/uuid.dart';
 import '../core/api.dart';
 import '../core/format.dart';
 import '../core/ledger.dart';
+import '../core/supplier_invoice_note.dart';
 import '../services/receipts.dart';
 import 'invoice_items.dart';
+import 'supplier_invoice_items.dart';
 import '../core/session.dart';
 import '../core/storage.dart';
 import '../ui/theme.dart';
@@ -118,6 +120,34 @@ class _TransactionScreenState extends State<TransactionScreen> {
       counterparty = TextEditingController(),
       handed = TextEditingController();
   final lines = <InvoiceLine>[];
+  final supplierPackCounts = <String, int>{};
+  bool _updatingSupplierNote = false;
+  bool _supplierNoteEdited = false;
+
+  void _noteChangedByUser() {
+    if (!_updatingSupplierNote && supplier && isInvoice) {
+      _supplierNoteEdited = true;
+    }
+  }
+
+  void _refreshSupplierInvoiceNote() {
+    if (!supplier || !isInvoice || !itemMode || _supplierNoteEdited || pending != null) return;
+    final generated = supplierInvoiceDescription(
+      invoiceNumber: invoice.text,
+      lines: lines,
+      packCounts: supplierPackCounts,
+    );
+    if (generated == note.text) return;
+    _updatingSupplierNote = true;
+    note.text = generated;
+    _updatingSupplierNote = false;
+  }
+
+  void _resetSupplierInvoiceNote() {
+    _supplierNoteEdited = false;
+    _refreshSupplierInvoiceNote();
+    setState(() {});
+  }
   bool itemMode = false, waiting = false, keepChange = false, receipt = false;
   bool get modern => Scope.of(context).ledgerV2;
   int get gross => cents(total.text) ?? 0;
@@ -134,6 +164,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
 
   void itemsChanged() => setState(() {
     total.text = decimalMoney(lines.fold(0, (sum, p) => sum + p.total));
+    _refreshSupplierInvoiceNote();
   });
   final speech = SpeechToText();
   Json? party, pending;
@@ -150,9 +181,25 @@ class _TransactionScreenState extends State<TransactionScreen> {
   bool get isInvoice => kind == 'Debt' || kind == 'Purchase';
   bool get isCustomerDebt => kind == 'Debt' && !supplier;
   bool get isCustomerPayment => kind == 'Payment' && !supplier;
-  bool get timestampOnSave => isCustomerDebt || kind == 'Payment';
+  bool get timestampOnSave => isInvoice || kind == 'Payment';
   bool get hasPayment =>
       kind == 'Payment' || (isInvoice && (cents(paid.text) ?? 0) > 0);
+  String get supplierInvoiceNote {
+    final body = note.text.trim();
+    if (!supplier || !isInvoice || !itemMode || !_supplierNoteEdited) {
+      return body;
+    }
+    // An edited description must still keep the package sizes that the
+    // backend's LedgerItem schema cannot store in a dedicated column.
+    final packages = [
+      for (final item in lines)
+        if (const {'كرتونة', 'صندوق', 'طرد', 'شوال'}.contains(item.unit))
+          '${item.name}: ${supplierPackCounts[item.id] ?? 12} عبوة في ${item.unit}',
+    ];
+    if (packages.isEmpty) return body;
+    return [body, 'تفاصيل العبوات: ${packages.join('؛ ')}']
+        .where((line) => line.isNotEmpty).join('\n');
+  }
   @override
   void initState() {
     super.initState();
@@ -161,7 +208,9 @@ class _TransactionScreenState extends State<TransactionScreen> {
     supplier =
         widget.supplier || kind == 'Purchase' || party?['kind'] == 'Supplier';
     // The sender of a customer transfer might be someone other than the customer.
-    counterparty.text = kind == 'Payment' ? '' : (party?['name'] ?? '');
+    counterparty.text = kind == 'Payment' || supplier ? '' : (party?['name'] ?? '');
+    note.addListener(_noteChangedByUser);
+    invoice.addListener(_refreshSupplierInvoiceNote);
     for (final c in [total, paid, discount, handed]) {
       c.addListener(recalculate);
     }
@@ -179,6 +228,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
         kind = data['kind'];
         total.text = '${data['amount']}';
         paid.text = '${data['paidNow']}';
+        _supplierNoteEdited = true;
         note.text = data['note'] ?? '';
         reference.text = data['reference'] ?? '';
         invoice.text = data['invoiceNumber'] ?? '';
@@ -197,6 +247,13 @@ class _TransactionScreenState extends State<TransactionScreen> {
           ),
         );
         itemMode = lines.isNotEmpty;
+        // Recover pack counts from the human-readable note in older drafts.
+        for (final item in lines) {
+          if (!const {'كرتونة', 'صندوق', 'طرد', 'شوال'}.contains(item.unit)) continue;
+          final pattern = RegExp('${RegExp.escape(item.name)}.*?(\\d+) عبوة');
+          final count = int.tryParse(pattern.firstMatch(note.text)?.group(1) ?? '');
+          if (count != null && count > 0) supplierPackCounts[item.id] = count;
+        }
         method = data['method'];
         when = DateTime.parse(data['occurredAt']).toLocal();
         party = await s.api.get('/api/parties/${data['partyId']}');
@@ -205,6 +262,10 @@ class _TransactionScreenState extends State<TransactionScreen> {
     } catch (e) {
       error = '$e';
     } finally {
+      if (pending == null && supplier && isInvoice && modern) {
+        itemMode = true;
+        _refreshSupplierInvoiceNote();
+      }
       if (pending == null &&
           widget.initialProduct != null &&
           mounted &&
@@ -297,7 +358,15 @@ class _TransactionScreenState extends State<TransactionScreen> {
       return;
     }
     if (pending == null) {
+      if (supplier && isInvoice && itemMode && lines.isEmpty) {
+        message(context, 'أضف صنفًا واحدًا على الأقل أو اختر المبلغ الإجمالي السريع.');
+        return;
+      }
       if (!form.currentState!.validate()) return;
+      if (supplier && isInvoice && itemMode && supplierInvoiceNote.length > 2000) {
+        message(context, 'بيان الفاتورة طويل جدًا. اختصر الملاحظات أو عدد الأصناف.');
+        return;
+      }
       if (party == null) {
         message(context, 'اختر ${supplier ? 'المورد' : 'الزبون'} أولاً.');
         return;
@@ -327,15 +396,19 @@ class _TransactionScreenState extends State<TransactionScreen> {
         'occurredAt': (timestampOnSave ? DateTime.now() : when)
             .toUtc()
             .toIso8601String(),
-        // Keep reference compatible with existing statements and reports.
-        // For customer transfers its content is the optional sender name.
-        'reference': isCustomerPayment && method != 'Cash'
-            ? counterparty.text.trim()
-            : (hasPayment ? reference.text.trim() : ''),
+        // Supplier payments intentionally have no reference/sender field.
+        // Existing customer transfer reports still use reference for sender.
+        'reference': supplier && kind == 'Payment'
+            ? ''
+            : isCustomerPayment && method != 'Cash'
+                ? counterparty.text.trim()
+                : (hasPayment ? reference.text.trim() : ''),
         'invoiceNumber': invoice.text.trim().isEmpty
             ? null
             : invoice.text.trim(),
-        'note': note.text.trim(),
+        'note': supplier && isInvoice && itemMode
+            ? supplierInvoiceNote
+            : note.text.trim(),
       };
       // Persist the exact request before network I/O; retries never create another ID.
       await draft.save(pending!);
@@ -410,6 +483,50 @@ class _TransactionScreenState extends State<TransactionScreen> {
     }
   }
 
+  Widget _partySelector() {
+    if (widget.party != null || pending != null) {
+      return ListTile(
+        tileColor: const Color(0xFFF7F8FB),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        leading: const Icon(Icons.person_outline),
+        title: Text('${party?['name'] ?? 'اختر الزبون'}'),
+        trailing: const Icon(Icons.lock_outline),
+      );
+    }
+    return PartyLookupField(
+      key: ValueKey('party-search-$supplier'),
+      label: supplier ? 'المورد' : 'الزبون',
+      selected: party,
+      enabled: !busy,
+      search: (text) async {
+        final response = await Scope.of(context).api.get(
+          supplier ? '/api/suppliers' : '/api/customers',
+          query: {'search': text, 'sort': 'name', 'page': 1, 'size': 30},
+        );
+        return (response['items'] as List)
+            .map((p) => Map<String, dynamic>.from(p as Map)).toList();
+      },
+      onSelected: (chosen) => setState(() {
+        party = chosen;
+        if (kind != 'Payment' && !supplier) {
+          counterparty.text = '${chosen?['name'] ?? ''}';
+        } else {
+          counterparty.clear();
+        }
+      }),
+    );
+  }
+
+  Widget _supplierInvoiceNumber() => TextFormField(
+    controller: invoice,
+    maxLength: 100,
+    decoration: const InputDecoration(
+      labelText: 'رقم الفاتورة',
+      hintText: 'اختياري',
+      counterText: '',
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -424,19 +541,27 @@ class _TransactionScreenState extends State<TransactionScreen> {
                 : supplier
                 ? 'تسجيل فاتورة مورد (بضاعة واردة)'
                 : 'تسجيل مشتريات (دين)',
-            style: appText(16, weight: FontWeight.w900),
+            style: appText(supplier && isInvoice ? 14 : 16, weight: FontWeight.w900),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
           Text(
-            '${party?['name'] ?? 'دفتر دين'} · حفظ ومزامنة البيانات',
+            supplier && isInvoice
+                ? 'أدخل الأصناف والكميات لمطابقة إجمالي الفاتورة تلقائيًا'
+                : '${party?['name'] ?? 'دفتر دين'} · حفظ ومزامنة البيانات',
             style: appText(10, color: muted),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
       actions: (isCustomerDebt || kind == 'Payment')
           ? [
               IconButton(
-                key: Key(isCustomerPayment
-                    ? 'payment-description-microphone'
+                key: Key(kind == 'Payment'
+                    ? (supplier
+                        ? 'supplier-payment-description-microphone'
+                        : 'payment-description-microphone')
                     : 'debt-description-microphone'),
                 tooltip: listening ? 'إيقاف الإملاء الصوتي' : 'إملاء وصف الحركة',
                 onPressed: busy || pending != null || restoring
@@ -460,7 +585,9 @@ class _TransactionScreenState extends State<TransactionScreen> {
             14,
             10 + MediaQuery.viewInsetsOf(context).bottom,
           ),
-          child: BusyButton(
+          child: Row(
+            children: [
+              Expanded(child: BusyButton(
             label: pending != null
                 ? 'إعادة محاولة حفظ نفس الحركة'
                 : kind == 'Payment'
@@ -473,6 +600,22 @@ class _TransactionScreenState extends State<TransactionScreen> {
             background: kind == 'Payment' ? navy : orange,
             busy: busy,
             onPressed: restoring ? null : save,
+          )),
+              if (supplier && isInvoice) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: navy,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    displayMoney(gross / 100),
+                    style: appText(11, color: Colors.white, weight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ),
@@ -547,59 +690,29 @@ class _TransactionScreenState extends State<TransactionScreen> {
                               ],
                             ),
                             const SizedBox(height: 10),
-                            if (widget.party == null && pending == null)
-                              PartyLookupField(
-                                key: ValueKey('party-search-$supplier'),
-                                label: supplier ? 'المورد' : 'الزبون',
-                                selected: party,
-                                enabled: !busy,
-                                search: (text) async {
-                                  final response = await Scope.of(context).api.get(
-                                    supplier ? '/api/suppliers' : '/api/customers',
-                                    query: {
-                                      'search': text,
-                                      'sort': 'name',
-                                      'page': 1,
-                                      'size': 30,
-                                    },
-                                  );
-                                  return (response['items'] as List)
-                                      .map((p) => Map<String, dynamic>.from(p as Map))
-                                      .toList();
-                                },
-                                onSelected: (chosen) => setState(() {
-                                  party = chosen;
-                                  if (kind != 'Payment') {
-                                    counterparty.text = '${chosen?['name'] ?? ''}';
-                                  } else {
-                                    // Do not assume the transfer sender is the customer.
-                                    counterparty.clear();
-                                  }
-                                }),
+                            if (supplier && isInvoice)
+                              LayoutBuilder(
+                                builder: (context, dimensions) =>
+                                    dimensions.maxWidth >= 295
+                                        ? Row(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Expanded(flex: 2, child: _partySelector()),
+                                              const SizedBox(width: 10),
+                                              Expanded(child: _supplierInvoiceNumber()),
+                                            ],
+                                          )
+                                        : Column(
+                                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                                            children: [
+                                              _partySelector(),
+                                              const SizedBox(height: 10),
+                                              _supplierInvoiceNumber(),
+                                            ],
+                                          ),
                               )
                             else
-                              ListTile(
-                                tileColor: const Color(0xFFF7F8FB),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                leading: const Icon(Icons.person_outline),
-                                title: Text('${party?['name'] ?? 'اختر الزبون'}'),
-                                trailing: const Icon(Icons.lock_outline),
-                              ),
-                            if (supplier && isInvoice) ...[
-                              const SizedBox(height: 12),
-                              field(
-                                invoice,
-                                'رقم الفاتورة (اختياري)',
-                                max: 100,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'اختر المورد وأدخل رقم الفاتورة، ثم سجّل الأصناف أو المبلغ الإجمالي حسب حاجتك.',
-                                style: appText(11, color: secondaryText),
-                              ),
-                            ],
+                              _partySelector(),
                           ],
                         ),
                       ),
@@ -620,20 +733,38 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                 },
                                 selected: itemMode,
                                 onSelected: (v) {
-                                  setState(() => itemMode = v);
+                                  setState(() {
+                                    itemMode = v;
+                                    if (!v && supplier && isInvoice && !_supplierNoteEdited) {
+                                      _updatingSupplierNote = true;
+                                      note.clear();
+                                      _updatingSupplierNote = false;
+                                    }
+                                  });
                                   if (itemMode) itemsChanged();
                                 },
                               ),
                               const SizedBox(height: 12),
                               if (itemMode)
-                                InvoiceItems(
-                                  lines: lines,
-                                  purchase: supplier,
-                                  onChanged: itemsChanged,
-                                ),
+                                supplier && isInvoice
+                                    ? SupplierInvoiceItems(
+                                        lines: lines,
+                                        onChanged: itemsChanged,
+                                        packCounts: supplierPackCounts,
+                                        onPackCountChanged: (id, count) {
+                                          supplierPackCounts[id] = count;
+                                          _refreshSupplierInvoiceNote();
+                                        },
+                                      )
+                                    : InvoiceItems(
+                                        lines: lines,
+                                        purchase: supplier,
+                                        onChanged: itemsChanged,
+                                      ),
                             ],
-                            Surface(
-                              child: Column(
+                            if (!supplier || !isInvoice || !itemMode)
+                              Surface(
+                                child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Text(
@@ -696,7 +827,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                 ],
                               ),
                             ),
-                            if (isInvoice)
+                            if (isInvoice && !supplier)
                               Surface(
                                 child: ExpansionTile(
                                   maintainState: true,
@@ -748,7 +879,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                   ],
                                 ),
                               ),
-                            if (hasPayment)
+                            if (hasPayment && !(supplier && isInvoice))
                               Surface(
                                 child: Column(
                                   crossAxisAlignment:
@@ -842,6 +973,85 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                   ],
                                 ),
                               ),
+                            if (supplier && isInvoice)
+                              Surface(
+                                color: const Color(0xFFECFDF5),
+                                child: ExpansionTile(
+                                  key: const Key('supplier-invoice-partial-payment'),
+                                  initiallyExpanded: (cents(paid.text) ?? 0) > 0,
+                                  maintainState: true,
+                                  tilePadding: EdgeInsets.zero,
+                                  title: Text(
+                                    'دفعت جزءًا من الفاتورة للمورد الآن؟',
+                                    style: appText(12, weight: FontWeight.w900, color: green),
+                                  ),
+                                  subtitle: Text(
+                                    'سجّل المبلغ المدفوع ليُخصم من صافي مستحقات المورد.',
+                                    style: appText(10, color: secondaryText),
+                                  ),
+                                  children: [
+                                    if (modern)
+                                      field(
+                                        discount,
+                                        'خصم على الفاتورة — شيكل',
+                                        keyboard: const TextInputType.numberWithOptions(decimal: true),
+                                        validator: (value) {
+                                          final n = cents(value ?? '');
+                                          return n == null || n >= gross
+                                              ? 'الخصم يجب أن يكون أقل من قيمة الفاتورة'
+                                              : null;
+                                        },
+                                      ),
+                                    field(
+                                      paid,
+                                      'المبلغ المدفوع الآن — شيكل',
+                                      keyboard: const TextInputType.numberWithOptions(decimal: true),
+                                      validator: (value) {
+                                        final amount = cents(value ?? '');
+                                        return amount == null || amount > net
+                                            ? 'الدفعة لا يجوز أن تتجاوز صافي الفاتورة'
+                                            : null;
+                                      },
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Wrap(
+                                      spacing: 6,
+                                      runSpacing: 5,
+                                      children: [
+                                        ActionChip(
+                                          label: const Text('دفع النصف 50%'),
+                                          onPressed: () => paid.text = decimalMoney((net.clamp(0, 99999999900).toInt() + 1) ~/ 2),
+                                        ),
+                                        ActionChip(
+                                          label: const Text('دفع كامل الفاتورة'),
+                                          onPressed: () => paid.text = decimalMoney(net.clamp(0, 99999999900).toInt()),
+                                        ),
+                                        ActionChip(
+                                          label: const Text('آجل بالكامل'),
+                                          onPressed: () => paid.text = '0',
+                                        ),
+                                      ],
+                                    ),
+                                    if (hasPayment) ...[
+                                      const SizedBox(height: 8),
+                                      Text('وسيلة السداد', style: appText(11, weight: FontWeight.w800)),
+                                      const SizedBox(height: 8),
+                                      Wrap(
+                                        spacing: 6,
+                                        runSpacing: 6,
+                                        children: [
+                                          for (final m in methods.entries)
+                                            ChoiceChip(
+                                              label: Text(m.value),
+                                              selected: method == m.key,
+                                              onSelected: (_) => setState(() => method = m.key),
+                                            ),
+                                        ],
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
                             if (modern &&
                                 hasPayment &&
                                 method == 'Cash' &&
@@ -904,7 +1114,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                   ],
                                 ),
                               ),
-                            if (modern && isInvoice)
+                            if (modern && isInvoice && !supplier)
                               Surface(
                                 child: Column(
                                   crossAxisAlignment:
@@ -960,16 +1170,35 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                   Text(
                                     isInvoice
                                         ? (supplier
-                                            ? 'ملاحظات فاتورة المورد (اختياري):'
+                                            ? 'بيان الفاتورة في السجل (اختياري):'
                                             : 'شو اشترى؟ / ملاحظات الفاتورة (اختياري):')
                                         : 'البيان / الملاحظة (اختياري):',
                                     style: appText(12, weight: FontWeight.w800),
                                   ),
+                                  if (supplier && isInvoice && itemMode) ...[
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      children: [
+                                        Expanded(child: Text(
+                                          _supplierNoteEdited
+                                              ? 'تم تعديل البيان يدويًا؛ لن يُستبدل تلقائيًا'
+                                              : 'يُولّد تلقائيًا من الأصناف ورقم الفاتورة',
+                                          style: appText(10, color: secondaryText),
+                                        )),
+                                        TextButton(
+                                          onPressed: _resetSupplierInvoiceNote,
+                                          child: const Text('توليد من جديد'),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                   const SizedBox(height: 10),
                                   field(
                                     note,
-                                    'وصف الحركة (اختياري)',
-                                    lines: 3,
+                                    supplier && isInvoice
+                                        ? 'تفاصيل البضاعة المستلمة أو ملاحظة'
+                                        : 'وصف الحركة (اختياري)',
+                                    lines: supplier && isInvoice ? 2 : 3,
                                     max: 2000,
                                   ),
                                   if (timestampOnSave)
@@ -1040,7 +1269,52 @@ class _TransactionScreenState extends State<TransactionScreen> {
                           ],
                         ),
                       ),
-                      if (modern && party != null)
+                      if (supplier && isInvoice && modern)
+                        Surface(
+                          color: navy,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text('إجمالي قيمة البضاعة (الفاتورة)',
+                                      style: appText(11, color: Colors.white)),
+                                  Text(displayMoney(gross / 100),
+                                      style: appText(16, weight: FontWeight.w900, color: Colors.white)),
+                                ],
+                              ),
+                              if ((cents(discount.text) ?? 0) > 0)
+                                _SupplierInvoiceSummaryRow(
+                                  'الخصم',
+                                  '- ${displayMoney((cents(discount.text) ?? 0) / 100)}',
+                                ),
+                              if ((cents(paid.text) ?? 0) > 0)
+                                _SupplierInvoiceSummaryRow(
+                                  'المبلغ المدفوع الآن',
+                                  '- ${displayMoney((cents(paid.text) ?? 0) / 100)}',
+                                ),
+                              const Divider(color: Colors.white38, height: 22),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text('الصافي المضاف لذمة المورد',
+                                      style: appText(12, color: Colors.white, weight: FontWeight.w900)),
+                                  Text(displayMoney(((net - actualPayment).clamp(0, 99999999900)) / 100),
+                                      style: appText(17, color: Colors.white, weight: FontWeight.w900)),
+                                ],
+                              ),
+                              if (party != null) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  'رصيد المورد بعد الحفظ: ${displayMoney((amountCents(party!['balance']) + net - actualPayment) / 100)}',
+                                  style: appText(10, color: const Color(0xFFDBDEFF)),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      if (modern && party != null && !(supplier && isInvoice))
                         Surface(
                           color: lavender,
                           child: Builder(
@@ -1099,5 +1373,22 @@ class _TransactionScreenState extends State<TransactionScreen> {
               ],
             ),
           ),
+  );
+}
+
+
+class _SupplierInvoiceSummaryRow extends StatelessWidget {
+  const _SupplierInvoiceSummaryRow(this.label, this.value);
+  final String label, value;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 7),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: appText(10, color: const Color(0xFFDBDEFF))),
+        Text(value, style: appText(11, color: Colors.white)),
+      ],
+    ),
   );
 }

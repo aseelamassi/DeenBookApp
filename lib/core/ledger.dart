@@ -35,6 +35,20 @@ class InvoiceLine {
     price: price,
     quantity: value,
   );
+  InvoiceLine withPrice(int value) => InvoiceLine(
+    id: id,
+    name: name,
+    unit: unit,
+    price: value,
+    quantity: quantity,
+  );
+  InvoiceLine withUnit(String value) => InvoiceLine(
+    id: id,
+    name: name,
+    unit: value,
+    price: price,
+    quantity: quantity,
+  );
   factory InvoiceLine.product(Json p, bool purchase) => InvoiceLine(
     id: p['id'],
     name: p['name'],

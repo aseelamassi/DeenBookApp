@@ -269,7 +269,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
       if (pending == null &&
           widget.initialProduct != null &&
           mounted &&
-          modern) {
+          modern &&
+          !supplier) {
         itemMode = true;
         lines.add(InvoiceLine.product(widget.initialProduct!, supplier));
         itemsChanged();

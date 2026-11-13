@@ -1004,59 +1004,141 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                   initiallyExpanded: (cents(paid.text) ?? 0) > 0,
                                   maintainState: true,
                                   tilePadding: EdgeInsets.zero,
+                                  childrenPadding: const EdgeInsets.only(
+                                    top: 20,
+                                    bottom: 10,
+                                  ),
                                   title: Text(
                                     'دفعت جزءًا من الفاتورة للمورد الآن؟',
                                     style: appText(12, weight: FontWeight.w900, color: green),
                                   ),
-                                  subtitle: Text(
-                                    'سجّل المبلغ المدفوع ليُخصم من صافي مستحقات المورد.',
-                                    style: appText(10, color: secondaryText),
+                                  subtitle: Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(
+                                      'سجّل المبلغ المدفوع ليُخصم من صافي مستحقات المورد.',
+                                      style: appText(10, color: secondaryText),
+                                    ),
                                   ),
                                   children: [
-                                    if (modern)
-                                      field(
-                                        discount,
-                                        'خصم على الفاتورة — شيكل',
-                                        keyboard: const TextInputType.numberWithOptions(decimal: true),
+                                    if (modern) ...[
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: Text(
+                                          'خصم على الفاتورة (₪) — اختياري',
+                                          style: appText(11, weight: FontWeight.w800),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 9),
+                                      TextFormField(
+                                        controller: discount,
+                                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                        textAlign: TextAlign.right,
+                                        decoration: const InputDecoration(
+                                          hintText: '0.00',
+                                          contentPadding: EdgeInsets.symmetric(
+                                            horizontal: 16, vertical: 15,
+                                          ),
+                                        ),
                                         validator: (value) {
-                                          final n = cents(value ?? '');
-                                          return n == null || n >= gross
+                                          final raw = (value ?? '').trim();
+                                          final n = raw.isEmpty ? 0 : cents(raw);
+                                          return n == null || n < 0 || n >= gross
                                               ? 'الخصم يجب أن يكون أقل من قيمة الفاتورة'
                                               : null;
                                         },
                                       ),
-                                    field(
-                                      paid,
-                                      'المبلغ المدفوع الآن — شيكل',
-                                      keyboard: const TextInputType.numberWithOptions(decimal: true),
+                                      const SizedBox(height: 18),
+                                    ],
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Text(
+                                        'المبلغ المدفوع الآن (₪)',
+                                        style: appText(11, weight: FontWeight.w800),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 9),
+                                    TextFormField(
+                                      key: const Key('supplier-invoice-paid-amount'),
+                                      controller: paid,
+                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                      textAlign: TextAlign.right,
+                                      decoration: const InputDecoration(
+                                        hintText: '0.00',
+                                        contentPadding: EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 15,
+                                        ),
+                                      ),
                                       validator: (value) {
-                                        final amount = cents(value ?? '');
-                                        return amount == null || amount > net
+                                        final raw = (value ?? '').trim();
+                                        final amount = raw.isEmpty ? 0 : cents(raw);
+                                        return amount == null || amount < 0 || amount > net
                                             ? 'الدفعة لا يجوز أن تتجاوز صافي الفاتورة'
                                             : null;
                                       },
                                     ),
-                                    const SizedBox(height: 6),
-                                    Wrap(
-                                      spacing: 6,
-                                      runSpacing: 5,
+                                    const SizedBox(height: 18),
+                                    // Keep all three shortcuts on ONE row, with
+                                    // two-line labels allowed on small phones.
+                                    Row(
                                       children: [
-                                        ActionChip(
-                                          label: const Text('دفع النصف 50%'),
-                                          onPressed: () => paid.text = decimalMoney((net.clamp(0, 99999999900).toInt() + 1) ~/ 2),
+                                        Expanded(
+                                          child: OutlinedButton(
+                                            key: const Key('supplier-pay-half'),
+                                            onPressed: () => paid.text = decimalMoney(
+                                              (net.clamp(0, 99999999900).toInt() + 1) ~/ 2,
+                                            ),
+                                            style: OutlinedButton.styleFrom(
+                                              minimumSize: const Size(0, 54),
+                                              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+                                            ),
+                                            child: Text(
+                                              'دفع النصف 50%',
+                                              textAlign: TextAlign.center,
+                                              maxLines: 2,
+                                              style: appText(10, weight: FontWeight.w800),
+                                            ),
+                                          ),
                                         ),
-                                        ActionChip(
-                                          label: const Text('دفع كامل الفاتورة'),
-                                          onPressed: () => paid.text = decimalMoney(net.clamp(0, 99999999900).toInt()),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: OutlinedButton(
+                                            key: const Key('supplier-pay-full'),
+                                            onPressed: () => paid.text = decimalMoney(
+                                              net.clamp(0, 99999999900).toInt(),
+                                            ),
+                                            style: OutlinedButton.styleFrom(
+                                              minimumSize: const Size(0, 54),
+                                              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+                                            ),
+                                            child: Text(
+                                              'دفع كامل الفاتورة',
+                                              textAlign: TextAlign.center,
+                                              maxLines: 2,
+                                              style: appText(10, weight: FontWeight.w800),
+                                            ),
+                                          ),
                                         ),
-                                        ActionChip(
-                                          label: const Text('آجل بالكامل'),
-                                          onPressed: () => paid.text = '0',
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: OutlinedButton(
+                                            key: const Key('supplier-pay-later'),
+                                            onPressed: () => paid.clear(),
+                                            style: OutlinedButton.styleFrom(
+                                              minimumSize: const Size(0, 54),
+                                              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+                                            ),
+                                            child: Text(
+                                              'آجل بالكامل',
+                                              textAlign: TextAlign.center,
+                                              maxLines: 2,
+                                              style: appText(10, weight: FontWeight.w800),
+                                            ),
+                                          ),
                                         ),
                                       ],
                                     ),
                                     if (hasPayment) ...[
-                                      const SizedBox(height: 8),
+                                      const SizedBox(height: 16),
                                       Text('وسيلة السداد', style: appText(11, weight: FontWeight.w800)),
                                       const SizedBox(height: 8),
                                       Wrap(

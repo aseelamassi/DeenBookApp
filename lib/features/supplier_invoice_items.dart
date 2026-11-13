@@ -90,7 +90,7 @@ class _SupplierInvoiceItemsState extends State<SupplierInvoiceItems> {
                   style: appText(13, weight: FontWeight.w900),
                 ),
               ),
-              SoftTag('$count أصناف'),
+              SoftTag('$count ${count == 1 ? 'صنف' : 'أصناف'}'),
             ],
           ),
           const SizedBox(height: 4),
@@ -211,6 +211,29 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
   }
 
   @override
+  void didUpdateWidget(covariant _SupplierLineCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Quick templates can update an existing empty row from the parent.
+    // Only sync controllers when the incoming value actually changed.
+    if (oldWidget.line.name != widget.line.name &&
+        _name.text != widget.line.name) {
+      _name.text = widget.line.name;
+    }
+    if (oldWidget.line.unit != widget.line.unit) {
+      _unit = widget.line.unit;
+    }
+    if (oldWidget.line.quantity != widget.line.quantity &&
+        quantityMillis(_qty.text) != widget.line.quantity) {
+      _qty.text = quantityText(widget.line.quantity);
+    }
+    if (oldWidget.line.price != widget.line.price &&
+        cents(_price.text) != widget.line.price) {
+      _price.text = widget.line.price > 0
+          ? decimalMoney(widget.line.price) : '';
+    }
+  }
+
+  @override
   void dispose() {
     _name.dispose();
     _qty.dispose();
@@ -241,7 +264,7 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
     if (packs < 1 || packs > 10000) return;
     setState(() {
       _packs = packs;
-      _packsInput.text = '$packs';
+      if (_packsInput.text != '$packs') _packsInput.text = '$packs';
     });
     widget.onPackCountChanged(packs);
   }
@@ -253,10 +276,15 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
         .withUnit(_unit)
         .withQuantity(quantityMillis(_qty.text) ?? widget.line.quantity)
         .withPrice(cents(_price.text) ?? 0);
-    final subtotal = line.total;
     final pieceCost = _packageUnit && line.price > 0 && _packs > 0
         ? money(line.price / _packs / 100)
         : null;
+
+    InputDecoration inputDecoration(String hint) => InputDecoration(
+      hintText: hint,
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+    );
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -268,32 +296,16 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // On a narrow phone, putting name + unit + quantity controls
+          // into one row makes their editable fields unusably small.
           Row(
             children: [
               SoftTag('${widget.index + 1}'),
               const SizedBox(width: 8),
               Expanded(
-                child: TextFormField(
-                  controller: _name,
-                  decoration: const InputDecoration(labelText: 'اسم الصنف'),
-                  onChanged: (_) => _emit(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 110,
-                child: DropdownButtonFormField<String>(
-                  value: _unit,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'الوحدة'),
-                  items: units
-                      .map((unit) => DropdownMenuItem(value: unit, child: Text(unit)))
-                      .toList(),
-                  onChanged: (unit) {
-                    if (unit == null) return;
-                    setState(() => _unit = unit);
-                    _emit();
-                  },
+                child: Text(
+                  'الصنف ${widget.index + 1}',
+                  style: appText(12, weight: FontWeight.w900),
                 ),
               ),
               IconButton(
@@ -303,78 +315,126 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
+          Text('اسم الصنف', style: appText(11, weight: FontWeight.w800)),
+          const SizedBox(height: 7),
+          TextFormField(
+            key: ValueKey('supplier-name-${widget.line.id}'),
+            controller: _name,
+            maxLength: 160,
+            decoration: inputDecoration('مثال: كرتونة رزيمان').copyWith(counterText: ''),
+            validator: (value) => value == null || value.trim().isEmpty
+                ? 'أدخل اسم الصنف' : null,
+            onChanged: (_) => _emit(),
+          ),
+          const SizedBox(height: 14),
+          Text('الوحدة', style: appText(11, weight: FontWeight.w800)),
+          const SizedBox(height: 7),
+          DropdownButtonFormField<String>(
+            value: _unit,
+            isExpanded: true,
+            decoration: inputDecoration('اختر الوحدة'),
+            items: units
+                .map((unit) => DropdownMenuItem(value: unit, child: Text(unit)))
+                .toList(),
+            onChanged: (unit) {
+              if (unit == null) return;
+              setState(() => _unit = unit);
+              _emit();
+            },
+          ),
+          const SizedBox(height: 16),
+          Text('الكمية ($_unit)', style: appText(11, weight: FontWeight.w800)),
+          const SizedBox(height: 7),
           Row(
             children: [
-              Expanded(
-                flex: 4,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('الكمية ($_unit)', style: appText(10, color: secondaryText)),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        IconButton.filledTonal(
-                          tooltip: 'زيادة',
-                          onPressed: () => _setQuantity((quantityMillis(_qty.text) ?? 1000) + 1000),
-                          icon: const Icon(Icons.add, size: 18),
-                        ),
-                        Expanded(
-                          child: TextFormField(
-                            controller: _qty,
-                            textAlign: TextAlign.center,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(),
-                            onChanged: (_) => setState(_emit),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'نقصان',
-                          onPressed: () => _setQuantity((quantityMillis(_qty.text) ?? 1000) - 1000),
-                          icon: const Icon(Icons.remove, size: 18),
-                        ),
-                      ],
-                    ),
-                  ],
+              SizedBox(
+                width: 44,
+                height: 48,
+                child: IconButton.filledTonal(
+                  tooltip: 'زيادة الكمية',
+                  onPressed: () => _setQuantity(
+                    (quantityMillis(_qty.text) ?? 1000) + 1000,
+                  ),
+                  icon: const Icon(Icons.add, size: 20),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
-                flex: 4,
+                child: TextFormField(
+                  key: ValueKey('supplier-quantity-${widget.line.id}'),
+                  controller: _qty,
+                  textAlign: TextAlign.center,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: inputDecoration('1'),
+                  validator: (value) => quantityMillis(value ?? '') == null
+                      ? 'أدخل كمية صحيحة' : null,
+                  onChanged: (_) => setState(_emit),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 44,
+                height: 48,
+                child: IconButton.outlined(
+                  tooltip: 'تقليل الكمية',
+                  onPressed: () => _setQuantity(
+                    (quantityMillis(_qty.text) ?? 1000) - 1000,
+                  ),
+                  icon: const Icon(Icons.remove, size: 20),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('سعر $_unit (₪)', style: appText(10, color: secondaryText)),
-                    const SizedBox(height: 4),
+                    Text('سعر $_unit (₪)',
+                        style: appText(11, weight: FontWeight.w800)),
+                    const SizedBox(height: 7),
                     TextFormField(
+                      key: ValueKey('supplier-unit-price-${widget.line.id}'),
                       controller: _price,
                       textAlign: TextAlign.center,
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(),
+                      decoration: inputDecoration('0.00'),
+                      validator: (value) {
+                        final price = cents(value ?? '');
+                        return price == null || price <= 0
+                            ? 'أدخل سعر الجملة' : null;
+                      },
                       onChanged: (_) => setState(_emit),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 12),
               Expanded(
-                flex: 3,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('المجموع', style: appText(10, color: secondaryText)),
-                    const SizedBox(height: 4),
+                    Text('المجموع', style: appText(11, weight: FontWeight.w800)),
+                    const SizedBox(height: 7),
                     Container(
-                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+                      constraints: const BoxConstraints(minHeight: 49),
+                      alignment: Alignment.center,
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 8),
                       decoration: BoxDecoration(
                         color: const Color(0xFFFFF1E5),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text(
-                        money(subtotal / 100),
-                        textAlign: TextAlign.center,
-                        style: appText(12, weight: FontWeight.w900, color: orange),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          money(line.total / 100),
+                          maxLines: 1,
+                          style: appText(13, weight: FontWeight.w900, color: orange),
+                        ),
                       ),
                     ),
                   ],
@@ -383,28 +443,37 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
             ],
           ),
           if (_packageUnit) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 18),
             Row(
               children: [
                 Expanded(
-                  child: Text('عدد العبوات بال$_unit:', style: appText(12, weight: FontWeight.w800)),
+                  child: Text('عدد العبوات في $_unit',
+                      style: appText(11, weight: FontWeight.w800)),
                 ),
+                const SizedBox(width: 10),
                 SizedBox(
-                  width: 72,
+                  width: 88,
                   child: TextFormField(
                     controller: _packsInput,
                     textAlign: TextAlign.center,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(),
+                    decoration: inputDecoration('12'),
+                    validator: (value) {
+                      final count = int.tryParse(value?.trim() ?? '');
+                      return count == null || count < 1 || count > 10000
+                          ? 'عدد غير صالح' : null;
+                    },
                     onChanged: (value) {
                       final next = int.tryParse(value.trim());
-                      if (next != null) _setPacks(next);
+                      if (next != null && next > 0 && next <= 10000) {
+                        _setPacks(next);
+                      }
                     },
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Wrap(
               spacing: 6,
               runSpacing: 6,
@@ -417,7 +486,7 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
                   ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Align(
               alignment: Alignment.centerRight,
               child: Container(
@@ -427,7 +496,7 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  pieceCost == null ? 'أدخل السعر والعدد' : 'للعبوة: $pieceCost',
+                  pieceCost == null ? 'أدخل السعر والعدد' : 'تكلفة العبوة: $pieceCost',
                   style: appText(11, color: green, weight: FontWeight.w900),
                 ),
               ),

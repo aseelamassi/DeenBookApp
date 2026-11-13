@@ -257,10 +257,13 @@ Widget partyTile(Json p, VoidCallback onTap) => Card(
     trailing: compactAmount(((p['balance'] as num?) ?? 0).abs()),
   ),
 );
-Widget entryTile(Json e, {String? name, VoidCallback? onConfirm, VoidCallback? onVoid}) {
+Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onConfirm, VoidCallback? onVoid}) {
   final pending = e['pendingConfirmation'] == true;
   final value = ((e['amount'] as num?) ?? 0) - ((e['discount'] as num?) ?? 0);
   final negative = ['Payment', 'Return'].contains(e['kind']);
+  final supplierInvoice = supplier && e['kind'] == 'Purchase';
+  final supplierPayment = supplier && e['kind'] == 'Payment';
+  final items = (e['items'] as List? ?? []);
   return Padding(
     padding: const EdgeInsets.symmetric(vertical: 10),
     child: Column(
@@ -274,11 +277,15 @@ Widget entryTile(Json e, {String? name, VoidCallback? onConfirm, VoidCallback? o
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    name ?? kinds[e['kind']] ?? 'حركة',
+                    name ?? (supplierInvoice
+                        ? 'فاتورة بضاعة مورد'
+                        : supplierPayment ? 'سداد دفعة لمورد'
+                        : kinds[e['kind']] ?? 'حركة'),
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   Text(
-                    '${kinds[e['kind']] ?? ''} · ${day(e['occurredAt'])}',
+                    '${supplierInvoice ? 'فاتورة توريد' : kinds[e['kind']] ?? ''} · ${day(e['occurredAt'])}'
+                        '${supplierInvoice && (e['invoiceNumber'] ?? '').toString().isNotEmpty ? ' · رقم ${e['invoiceNumber']}' : ''}',
                     style: const TextStyle(color: muted, fontSize: 12),
                   ),
                 ],
@@ -309,14 +316,42 @@ Widget entryTile(Json e, {String? name, VoidCallback? onConfirm, VoidCallback? o
             '${e['kind'] == 'Payment' && e['method'] != 'Cash' ? 'اسم صاحب الحوالة' : e['kind'] == 'Payment' ? 'الدافع / المستلم' : 'مستلم البضاعة'}: ${e['counterpartyName']}',
             style: const TextStyle(fontSize: 12),
           ),
-        for (final p in (e['items'] as List? ?? []))
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              '${p['name']} · ${quantityText(((p['quantity'] as num) * 1000).round())} ${p['unit']} · ${money(p['total'])}',
-              style: const TextStyle(fontSize: 12, color: muted),
+        if (supplierInvoice && items.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(top: 10),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF7F8FB),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: lineColor),
             ),
-          ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final p in items) ...[
+                  Text(
+                    '${quantityText(((p['quantity'] as num) * 1000).round())} ${p['unit']} ${p['name']}',
+                    style: appText(11, weight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${money(p['unitPrice'])} × ${quantityText(((p['quantity'] as num) * 1000).round())} = ${money(p['total'])}',
+                    style: appText(11, color: orange, weight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ],
+            ),
+          )
+        else
+          for (final p in items)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '${p['name']} · ${quantityText(((p['quantity'] as num) * 1000).round())} ${p['unit']} · ${money(p['total'])}',
+                style: const TextStyle(fontSize: 12, color: muted),
+              ),
+            ),
         if (amountCents(e['discount']) > 0)
           Text(
             'الخصم: ${money(e['discount'])}',
@@ -324,7 +359,7 @@ Widget entryTile(Json e, {String? name, VoidCallback? onConfirm, VoidCallback? o
           ),
         if (amountCents(e['paidNow']) > 0)
           Text(
-            'دفع فوري: ${money(e['paidNow'])}',
+            '${supplierInvoice ? 'دفعة فورية للمورد' : 'دفع فوري'}: ${money(e['paidNow'])}',
             style: const TextStyle(fontSize: 12),
           ),
         if ((e['createdByName'] ?? '').toString().isNotEmpty)

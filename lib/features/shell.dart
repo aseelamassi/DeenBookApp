@@ -503,7 +503,7 @@ class HomeScreen extends StatelessWidget {
                               ],
                             ),
                             Text(
-                              'مرتبة حسب أعلى رصيد قائم بذمة الزبون',
+                              'ديون الزبائن والأرصدة الدائنة التي تحتاج متابعة',
                               style: appText(
                                 11,
                                 color: muted,
@@ -553,13 +553,18 @@ class HomeScreen extends StatelessWidget {
                                       Column(
                                         children: [
                                           amount(
-                                            p['balance'],
+                                            ((p['balance'] as num?) ?? 0).abs(),
                                             size: 16,
-                                            color: orange,
+                                            color: ((p['balance'] as num?) ?? 0) < 0
+                                                ? green : orange,
                                           ),
                                           Text(
-                                            'عليه دين',
-                                            style: appText(10, color: muted),
+                                            customerBalanceStatus(
+                                              (p['balance'] as num?) ?? 0,
+                                            ),
+                                            style: appText(10,
+                                                color: ((p['balance'] as num?) ?? 0) < 0
+                                                    ? green : muted),
                                           ),
                                         ],
                                       ),

@@ -60,6 +60,10 @@ const kinds = {
   'Payment': 'دفعة',
   'Return': 'مرتجع',
 };
+String customerBalanceStatus(num balance) => balance < 0
+    ? 'له رصيد'
+    : balance > 0 ? 'عليه دين' : 'خالص';
+
 String balanceLabel(Map<String, dynamic> p) {
   final balance = (p['balance'] as num?) ?? 0;
   if (balance == 0) return 'الحساب مسدّد';

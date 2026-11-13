@@ -1,3 +1,4 @@
+import 'package:uuid/uuid.dart';
 import 'api.dart';
 import 'format.dart';
 
@@ -64,12 +65,22 @@ class InvoiceLine {
     quantity: 1000,
   );
   factory InvoiceLine.fromJson(Json p) => InvoiceLine(
-    id: p['productId'],
+    // Supplier invoice items intentionally have no retail product ID. Use a
+    // unique local editor key when restoring an unlinked invoice draft.
+    id: p['productId'] == null ||
+            p['productId'] == '00000000-0000-0000-0000-000000000000'
+        ? const Uuid().v4()
+        : p['productId'],
     name: p['name'],
     unit: p['unit'],
     price: amountCents(p['unitPrice']),
     quantity: ((p['quantity'] as num) * 1000).round(),
   );
+  // Invoice-only wholesale lines must never reference the retail catalog.
+  Json toSupplierInvoiceJson() => {
+    ...toJson(),
+    'productId': '00000000-0000-0000-0000-000000000000',
+  };
   Json toJson() => {
     'productId': id,
     'name': name,

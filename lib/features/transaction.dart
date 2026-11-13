@@ -359,9 +359,17 @@ class _TransactionScreenState extends State<TransactionScreen> {
       return;
     }
     if (pending == null) {
-      if (supplier && isInvoice && itemMode && lines.isEmpty) {
-        message(context, 'أضف صنفًا واحدًا على الأقل أو اختر المبلغ الإجمالي السريع.');
-        return;
+      if (supplier && isInvoice && itemMode) {
+        if (lines.isEmpty) {
+          message(context, 'أضف صنفًا واحدًا على الأقل أو اختر المبلغ الإجمالي السريع.');
+          return;
+        }
+        if (lines.any((line) => line.name.trim().isEmpty ||
+            line.name.trim().length > 160 || line.price <= 0 ||
+            line.quantity <= 0 || line.unit.trim().isEmpty)) {
+          message(context, 'تأكد من اسم كل صنف وكميته وسعر الجملة قبل الحفظ.');
+          return;
+        }
       }
       if (!form.currentState!.validate()) return;
       if (supplier && isInvoice && itemMode && supplierInvoiceNote.length > 2000) {
@@ -390,7 +398,9 @@ class _TransactionScreenState extends State<TransactionScreen> {
           'counterpartyName': counterparty.text.trim(),
           'pendingConfirmation': pendingTransfer,
           'items': isInvoice && itemMode
-              ? lines.map((p) => p.toJson()).toList()
+              ? lines.map((p) => supplier
+                  ? p.toSupplierInvoiceJson()
+                  : p.toJson()).toList()
               : [],
         },
         'method': hasPayment ? method : 'Cash',

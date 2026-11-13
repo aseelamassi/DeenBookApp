@@ -1022,8 +1022,8 @@ class _PartyFormState extends State<PartyForm> {
   );
 }
 
-/// Supplier details are intentionally separate from customer statements.
-/// This screen uses the existing party API and preserves transaction behavior.
+/// The supplier account includes the full wholesale invoice and payment ledger.
+/// It never depends on the shop's retail product catalog.
 class SupplierDetail extends StatefulWidget {
   const SupplierDetail({super.key, required this.id});
   final String id;
@@ -1041,7 +1041,9 @@ class _SupplierDetailState extends State<SupplierDetail> {
     future ??= load();
   }
 
-  Future<Json> load() => Scope.of(context).api.get('/api/parties/${widget.id}');
+  Future<Json> load() => Scope.of(context).api.get(
+    '/api/parties/${widget.id}/statement',
+  );
 
   void refresh() => setState(() => future = load());
 
@@ -1053,9 +1055,25 @@ class _SupplierDetailState extends State<SupplierDetail> {
     if (mounted) refresh();
   }
 
+  Future<void> voidEntry(Json entry) async {
+    if (!await confirm(context, 'شطب الحركة',
+        'سيتم إلغاء أثر الحركة المالي مع الاحتفاظ بسجل التدقيق. هل أنت متأكد؟')) {
+      return;
+    }
+    if (!mounted) return;
+    try {
+      final session = Scope.of(context);
+      await session.api.request('POST', '/api/transactions/${entry['id']}/void');
+      session.changed();
+      if (mounted) refresh();
+    } catch (error) {
+      if (mounted) message(context, error);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('بيانات المورد')),
+    appBar: AppBar(title: const Text('بطاقة حساب مورد')),
     body: FutureBuilder<Json>(
       future: future,
       builder: (context, snapshot) {
@@ -1064,7 +1082,7 @@ class _SupplierDetailState extends State<SupplierDetail> {
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: Empty(
-                'تعذّر تحميل بيانات المورد',
+                'تعذّر تحميل كشف المورد',
                 '${snapshot.error}',
                 action: OutlinedButton(
                   onPressed: refresh,
@@ -1077,14 +1095,20 @@ class _SupplierDetailState extends State<SupplierDetail> {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        final supplier = snapshot.data!;
+        final statement = snapshot.data!;
+        final supplier = Map<String, dynamic>.from(statement['party'] as Map);
+        final entries = (statement['entries'] as List)
+            .map((entry) => Map<String, dynamic>.from(entry as Map))
+            .toList();
+        final totals = historyTotals(entries, supplier: true);
+        final balance = (supplier['balance'] as num?) ?? 0;
         return Width(
           child: ListView(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(16),
             children: [
               Surface(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Heading(
                       '${supplier['name']}',
@@ -1100,31 +1124,37 @@ class _SupplierDetailState extends State<SupplierDetail> {
                         },
                       ),
                     ),
-                    Text(
-                      balanceLabel(supplier),
-                      style: const TextStyle(color: muted),
-                    ),
-                    const SizedBox(height: 6),
-                    amount(((supplier['balance'] as num?) ?? 0).abs()),
-                    if ('${supplier['category'] ?? ''}'.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: Text('التصنيف: ${supplier['category']}'),
-                      ),
                     if ('${supplier['phone'] ?? ''}'.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text('${supplier['phone']}'),
+                      Text('الجوال: ${supplier['phone']}',
+                          style: appText(12, color: secondaryText)),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(15),
+                      decoration: BoxDecoration(
+                        color: paleOrange,
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                    if ('${supplier['alternatePhone'] ?? ''}'.isNotEmpty)
-                      Text(
-                        '${supplier['alternateContact'] ?? 'هاتف إضافي'}: ${supplier['alternatePhone']}',
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(balanceLabel(supplier),
+                              style: appText(12, color: secondaryText)),
+                          const SizedBox(height: 4),
+                          amount(balance.abs(), size: 28, color: orange),
+                          if ('${supplier['category'] ?? ''}'.isNotEmpty)
+                            Text('فئة التوريد: ${supplier['category']}',
+                                style: appText(11, color: secondaryText)),
+                        ],
                       ),
-                    if ('${supplier['deliveryDays'] ?? ''}'.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text('التوريد: ${supplier['deliveryDays']}'),
-                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(child: metric('إجمالي الفواتير', totals['invoices'])),
+                        const SizedBox(width: 8),
+                        Expanded(child: metric('إجمالي المدفوع', totals['paid'])),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -1132,7 +1162,7 @@ class _SupplierDetailState extends State<SupplierDetail> {
                 children: [
                   Expanded(
                     child: BusyButton(
-                      label: 'فاتورة',
+                      label: 'تسجيل فاتورة مورد',
                       background: orange,
                       onPressed: () => action(supplier, 'Purchase'),
                     ),
@@ -1140,11 +1170,45 @@ class _SupplierDetailState extends State<SupplierDetail> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: BusyButton(
-                      label: 'دفعة',
+                      label: 'سداد دفعة لمورد',
                       onPressed: () => action(supplier, 'Payment'),
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 14),
+              Surface(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text('سجل الحركات المالي',
+                              style: appText(14, weight: FontWeight.w900)),
+                        ),
+                        SoftTag('${entries.length}'),
+                      ],
+                    ),
+                    const SizedBox(height: 7),
+                    Text('فواتير البضاعة ودفعات المورد، مع تفاصيل الأصناف وسعر الجملة.',
+                        style: appText(11, color: secondaryText)),
+                    const SizedBox(height: 12),
+                    if (entries.isEmpty)
+                      const Text('لا توجد حركات مسجلة للمورد بعد.')
+                    else
+                      for (final entry in runningStatement(statement).reversed) ...[
+                        entryTile(
+                          entry,
+                          supplier: true,
+                          onVoid: Scope.of(context).isOwner
+                              ? () => voidEntry(entry)
+                              : null,
+                        ),
+                        const Divider(height: 16),
+                      ],
+                  ],
+                ),
               ),
             ],
           ),
@@ -1183,7 +1247,9 @@ class _PartyDetailState extends State<PartyDetail> {
       final data = s.data;
       return Scaffold(
         appBar: AppBar(
-          title: const Text('كشف الحساب'),
+          title: Text(data?['party']?['kind'] == 'Supplier'
+              ? 'بطاقة حساب مورد'
+              : 'كشف الحساب'),
           actions: [
             IconButton(
               tooltip: 'مشاركة كشف الحساب',
@@ -1307,7 +1373,7 @@ class _PartyDetailState extends State<PartyDetail> {
                                     ? 'Purchase'
                                     : 'Debt',
                                 'Payment',
-                                'Return',
+                                if (data['party']['kind'] != 'Supplier') 'Return',
                               ])
                                 OutlinedButton(
                                   onPressed: () async {
@@ -1328,7 +1394,11 @@ class _PartyDetailState extends State<PartyDetail> {
                                       if (context.mounted) message(context, e);
                                     }
                                   },
-                                  child: Text(kinds[kind]!),
+                                  child: Text(data['party']['kind'] == 'Supplier'
+                                      ? (kind == 'Purchase'
+                                          ? 'تسجيل فاتورة مورد'
+                                          : 'سداد دفعة لمورد')
+                                      : kinds[kind]!),
                                 ),
                             ],
                           ),
@@ -1389,6 +1459,42 @@ class _PartyDetailState extends State<PartyDetail> {
                         ],
                       ),
                     ),
+                    if (data['party']['kind'] == 'Supplier')
+                      Surface(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text('سجل الحركات المالي',
+                                style: appText(14, weight: FontWeight.w800)),
+                            const SizedBox(height: 6),
+                            Text(
+                              'تظهر هنا فواتير المورد وأصنافها بالتفصيل ودفعات السداد.',
+                              style: appText(11, color: secondaryText),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(child: metric(
+                                  'إجمالي الفواتير',
+                                  (data['entries'] as List).where((e) => e['kind'] == 'Purchase')
+                                      .fold<double>(0, (sum, e) => sum +
+                                          ((e['amount'] as num?) ?? 0).toDouble() -
+                                          ((e['discount'] as num?) ?? 0).toDouble()),
+                                )),
+                                const SizedBox(width: 8),
+                                Expanded(child: metric(
+                                  'إجمالي المدفوع',
+                                  (data['entries'] as List).fold<double>(0,
+                                      (sum, e) => sum +
+                                          (e['kind'] == 'Payment'
+                                              ? ((e['amount'] as num?) ?? 0).toDouble()
+                                              : ((e['paidNow'] as num?) ?? 0).toDouble())),
+                                )),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                     if ((data['entries'] as List).isEmpty)
                       const Empty(
                         'لا توجد حركات',
@@ -1401,6 +1507,7 @@ class _PartyDetailState extends State<PartyDetail> {
                               .map(
                                 (e) => entryTile(
                                   e,
+                                  supplier: data['party']['kind'] == 'Supplier',
                                   onVoid: Scope.of(context).isOwner ? () async {
                                     if (!await confirm(context, 'شطب الحركة',
                                         'سيتم إلغاء الأثر المالي للحركة من كشف الحساب مع الاحتفاظ بسجل تدقيق. هل أنت متأكد؟')) return;

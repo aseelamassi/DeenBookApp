@@ -142,7 +142,7 @@ void main() {
     },
   );
   testWidgets(
-    'invoice discount and optional retained cash produce one request',
+    'customer debt optional payment has no discount or invoice number',
     (t) async {
       size(t);
       Json? sent;
@@ -160,21 +160,58 @@ void main() {
       await t.pumpWidget(wrap(s, TransactionScreen(party: party())));
       await t.pumpAndSettle();
       await enter(t, 'المبلغ — شيكل', '100');
-      await tap(t, 'خصم أو دفعة مع المشتريات (اختياري)');
-      await enter(t, 'الخصم — شيكل', '10');
-      await enter(t, 'المدفوع الآن — شيكل', '90');
+      await tap(t, 'دفعة مع المشتريات (اختياري)');
+      expect(find.text('الخصم — شيكل'), findsNothing);
+      expect(find.text('رقم الفاتورة (اختياري)'), findsNothing);
+      expect(
+        t.widget<TextFormField>(
+          find.byKey(const Key('customer-debt-paid-now')),
+        ).controller!.text,
+        isEmpty,
+      );
+      await t.enterText(find.byKey(const Key('customer-debt-paid-now')), '90');
       await t.pumpAndSettle();
       await tap(t, 'حاسبة الفكّة السريعة (تسجيل الباقي رصيد)');
       await enter(t, 'المبلغ المسلّم نقداً (اختياري)', '100');
       await tap(t, 'احتساب الباقي رصيداً للزبون');
       await tap(t, 'تأكيد وحفظ المشتريات في دفتر دين ✓');
       expect(sent!['amount'], 100);
-      expect(sent!['discount'], 10);
+      expect(sent!['discount'], 0);
+      expect(sent!['invoiceNumber'], isNull);
       expect(sent!['paidNow'], 100);
       expect(sent!['operationId'], isNotEmpty);
       expect(t.takeException(), isNull);
     },
   );
+  testWidgets('customer debt saves without a payment when optional input is empty', (t) async {
+    size(t);
+    Json? sent;
+    final s = (await t.runAsync(
+      () => fakeSession(
+        override: (r) {
+          if (r.path == '/api/transactions' && r.method == 'POST') {
+            sent = Map<String, dynamic>.from(r.data);
+            return response({...entry(), ...sent!});
+          }
+          return null;
+        },
+      ),
+    ))!;
+    await t.pumpWidget(wrap(s, TransactionScreen(party: party())));
+    await t.pumpAndSettle();
+    await enter(t, 'المبلغ — شيكل', '100');
+    await tap(t, 'دفعة مع المشتريات (اختياري)');
+    expect(
+      t.widget<TextFormField>(find.byKey(const Key('customer-debt-paid-now')))
+          .controller!.text,
+      isEmpty,
+    );
+    await tap(t, 'تأكيد وحفظ المشتريات في دفتر دين ✓');
+    expect(sent!['paidNow'], 0);
+    expect(sent!['discount'], 0);
+    expect(sent!['invoiceNumber'], isNull);
+    expect(t.takeException(), isNull);
+  });
   testWidgets('supplier header filters and four sorts fit a small screen', (
     t,
   ) async {

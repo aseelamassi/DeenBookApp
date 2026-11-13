@@ -11,6 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import '../core/api.dart';
 import '../core/format.dart';
 import '../core/ledger.dart';
+import 'report_export_guard.dart';
 
 class Exports {
   static String pdfMoney(dynamic value) => money(value).replaceAll('₪', 'شيكل');
@@ -177,6 +178,7 @@ class Exports {
     DateTimeRange? range,
     String? kind, {
     String? selectionLabel,
+    int pendingLocal = 0,
   }) async {
     final bytes = await document(
       shop,
@@ -185,6 +187,7 @@ class Exports {
         rangeLabel(range),
         kind == null ? 'كل الحركات' : kinds[kind]!,
         if (selectionLabel?.isNotEmpty == true) selectionLabel!,
+        if (pendingLocal > 0) ReportExportGuard.pendingNotice(pendingLocal),
       ],
       ['التاريخ', 'الحساب', 'الحركة', 'المبلغ', 'الوصف'],
       rows
@@ -208,13 +211,17 @@ class Exports {
   static Future<void> report(
     String shop,
     Json data,
-    DateTimeRange range,
-  ) async {
+    DateTimeRange range, {
+    int pendingLocal = 0,
+  }) async {
     final s = data['summary'], c = data['cash'];
     final bytes = await document(
       shop,
       'تقرير المحل',
-      [rangeLabel(range)],
+      [
+        rangeLabel(range),
+        if (pendingLocal > 0) ReportExportGuard.pendingNotice(pendingLocal),
+      ],
       ['البيان', 'القيمة'],
       [
         ['المقبوضات — كل الوسائل', pdfMoney(s['received'])],
@@ -254,22 +261,35 @@ class Exports {
     return '"${safe.replaceAll('"', '""')}"';
   }
 
-  static String historyCsvText(List<Json> rows, Map<String, String> names) =>
+  static String historyCsvText(
+    List<Json> rows,
+    Map<String, String> names, {
+    int pendingLocal = 0,
+  }) =>
       '\uFEFF${[
         ['التاريخ', 'الحساب', 'الحركة', 'المبلغ بعد الخصم', 'حالة الحوالة', 'الوصف'].map(csvCell).join(','),
+        if (pendingLocal > 0)
+          [
+            'تنبيه - ليس حركة',
+            ReportExportGuard.pendingNotice(pendingLocal),
+            '', '', '', '',
+          ].map(csvCell).join(','),
         ...rows.map((e) => [csvCell(day(e['occurredAt'])), csvCell(names[e['partyId']] ?? ''), csvCell(kinds[e['kind']] ?? 'حركة'), decimalMoney(amountCents(e['amount']) - amountCents(e['discount'])), csvCell(e['pendingConfirmation'] == true ? 'بانتظار التأكيد — غير محتسبة' : 'مسجّلة'), csvCell(entryDescription(e))].join(',')),
       ].join('\r\n')}';
   static Future<void> historyCsv(
     BuildContext context,
     List<Json> rows,
-    Map<String, String> names,
-  ) async {
+    Map<String, String> names, {
+    int pendingLocal = 0,
+  }) async {
     final box = context.findRenderObject() as RenderBox?;
     await SharePlus.instance.share(
       ShareParams(
         files: [
           XFile.fromData(
-            Uint8List.fromList(utf8.encode(historyCsvText(rows, names))),
+            Uint8List.fromList(utf8.encode(historyCsvText(
+                rows, names, pendingLocal: pendingLocal,
+              ))),
             mimeType: 'text/csv',
           ),
         ],

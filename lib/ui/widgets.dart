@@ -259,6 +259,7 @@ Widget partyTile(Json p, VoidCallback onTap) => Card(
 );
 Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onConfirm, VoidCallback? onVoid}) {
   final pending = e['pendingConfirmation'] == true;
+  final offlinePending = e['offlinePending'] == true;
   final value = ((e['amount'] as num?) ?? 0) - ((e['discount'] as num?) ?? 0);
   final negative = ['Payment', 'Return'].contains(e['kind']);
   final supplierInvoice = supplier && e['kind'] == 'Purchase';
@@ -375,7 +376,17 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
             ),
           ),
-        if (onVoid != null) ...[
+        if (offlinePending)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              e['offlineBlocked'] == true
+                  ? 'الحركة محفوظة محليًا وتحتاج مراجعة قبل المزامنة'
+                  : 'محفوظة على الجهاز — بانتظار المزامنة',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF8B5800)),
+            ),
+          ),
+        if (onVoid != null && !offlinePending) ...[
           Align(
             alignment: AlignmentDirectional.centerStart,
             child: TextButton.icon(
@@ -418,13 +429,30 @@ Future<T?> open<T>(BuildContext context, Widget screen) {
       clipBehavior: Clip.antiAlias,
       showDragHandle: true,
       constraints: const BoxConstraints(maxWidth: 480),
-      builder: (c) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(c).bottom),
-        child: SizedBox(
-          height: MediaQuery.sizeOf(c).height * .78,
-          child: screen,
-        ),
-      ),
+      // Use the keyboard-safe height for the modal itself. Previously the
+      // sheet kept a fixed 78% of the full display *and* padded for the
+      // keyboard, while its nested Scaffold subtracted the same keyboard
+      // inset again. That left only the first field visible when typing.
+      builder: (c) {
+        final keyboardHeight = MediaQuery.viewInsetsOf(c).bottom;
+        final displayHeight = MediaQuery.sizeOf(c).height;
+        final usableHeight = (displayHeight - keyboardHeight)
+            .clamp(0.0, displayHeight)
+            .toDouble();
+        return Padding(
+          padding: EdgeInsets.only(bottom: keyboardHeight),
+          child: SizedBox(
+            height: usableHeight * (keyboardHeight > 0 ? .90 : .78),
+            // The sheet is already above the keyboard. Do not also resize
+            // the form's Scaffold for the same keyboard inset.
+            child: MediaQuery.removeViewInsets(
+              context: c,
+              removeBottom: true,
+              child: screen,
+            ),
+          ),
+        );
+      },
     );
   }
   return Navigator.of(

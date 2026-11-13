@@ -5,6 +5,7 @@ import '../core/format.dart';
 import '../core/session.dart';
 import '../services/receipts.dart';
 import '../services/export.dart';
+import '../services/report_export_guard.dart';
 import '../ui/theme.dart';
 import '../ui/design.dart';
 import 'catalog.dart';
@@ -88,17 +89,25 @@ class _ReportsScreenState extends State<ReportsScreen> {
         actions: [
           IconButton(
             tooltip: 'طباعة التقرير',
-            onPressed: session.isOffline || session.pendingSync > 0
-                ? null
-                : () async {
-                    try {
-                      final data = await future;
-                      if (data == null || !context.mounted) return;
-                      await Exports.report(session.shopName, data, range);
-                    } catch (e) {
-                      if (context.mounted) message(context, e);
-                    }
-                  },
+            onPressed: () async {
+              if (!await ReportExportGuard.confirmServerOnly(context, session)) return;
+              if (!mounted) return;
+              try {
+                // Refresh before printing, rather than trusting an older snapshot.
+                final data = await load();
+                if (!mounted) return;
+                if (session.isOffline) {
+                  message(context, 'انقطع الاتصال بالخادم. لم تتم الطباعة حتى لا نصدر بيانات ناقصة.');
+                  return;
+                }
+                await Exports.report(
+                  session.shopName, data, range,
+                  pendingLocal: session.pendingSync,
+                );
+              } catch (e) {
+                if (mounted) message(context, e);
+              }
+            },
             icon: const Icon(Icons.print_outlined),
           ),
         ],
@@ -159,8 +168,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           ? 'هذه أرقام آخر نسخة تم تنزيلها من الخادم، وقد لا تطابق الوضع الحالي.'
                           : 'هناك ${session.pendingSync} حركة على الجهاز لم تُسجّل على الخادم بعد.',
                     ),
-                    const Text(
-                      'الطباعة متوقفة مؤقتاً إلى أن تتأكد مزامنة البيانات، حتى لا تخرج نسخة محاسبية غير مكتملة.',
+                    Text(
+                      session.isOffline
+                          ? 'اتصل بالخادم لتحديث التقرير وإجراء طباعة دقيقة.'
+                          : 'يمكنك طباعة بيانات الخادم المتزامنة فقط؛ الحركات الموجودة على الجهاز بانتظار المزامنة لن تُدرج في التقرير.',
                     ),
                   ],
                 ),
@@ -443,6 +454,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<void> printAll({bool csv = false}) async {
+    final session = Scope.of(context);
+    if (!await ReportExportGuard.confirmServerOnly(context, session)) return;
+    if (!mounted || printing || busy || error != null) return;
+    final pendingLocal = session.pendingSync;
     final params = query;
     final exportParty = selectedParty;
     final selectedRange = range;
@@ -453,7 +468,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
       if (partyKind == 'Supplier') 'حركات الموردين',
       if (pendingOnly) 'الحوالات بانتظار التأكيد فقط',
     ].join(' · ');
-    final session = Scope.of(context);
     setState(() => printing = true);
     try {
       final entries = <Json>[];
@@ -465,6 +479,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 query: {...params, 'page': p++, 'size': 100},
               )
             : await accountHistory(exportParty, params);
+        if (session.isOffline) {
+          throw StateError('انقطع الاتصال بالخادم أثناء تجهيز التقرير. أعد المحاولة عند عودة الاتصال.');
+        }
         entries.addAll(
           (response['items'] as List).map((e) => Map<String, dynamic>.from(e)),
         );
@@ -473,14 +490,28 @@ class _HistoryScreenState extends State<HistoryScreen> {
           break;
         }
       }
-      final printNames = <String, String>{};
+      final printNames = <String, String>{...names};
+      if (exportParty != null) {
+        printNames['${exportParty['id']}'] = '${exportParty['name']}';
+      }
       for (final id in entries.map((e) => e['partyId'] as String).toSet()) {
-        final party = await session.api.get('/api/parties/$id');
-        printNames[id] = '${party['name']}';
+        if (printNames.containsKey(id)) continue;
+        try {
+          final party = await session.api.get('/api/parties/$id');
+          if (session.isOffline) {
+            throw StateError('انقطع الاتصال بالخادم قبل إكمال أسماء الحسابات.');
+          }
+          printNames[id] = '${party['name']}';
+        } on ApiFailure catch (e) {
+          if (session.isOffline || e.status != 404) rethrow;
+          printNames[id] = 'حساب سابق';
+        }
       }
       if (!mounted) return;
       if (csv) {
-        await Exports.historyCsv(context, entries, printNames);
+        await Exports.historyCsv(
+          context, entries, printNames, pendingLocal: pendingLocal,
+        );
       } else {
         await Exports.history(
           session.shopName,
@@ -489,12 +520,36 @@ class _HistoryScreenState extends State<HistoryScreen> {
           selectedRange,
           selectedKind,
           selectionLabel: selectedLabel,
+          pendingLocal: pendingLocal,
         );
       }
     } catch (e) {
       if (mounted) message(context, e);
     } finally {
       if (mounted) setState(() => printing = false);
+    }
+  }
+
+  Future<void> shareSummary() async {
+    final session = Scope.of(context);
+    if (!await ReportExportGuard.confirmServerOnly(context, session)) return;
+    if (!mounted || printing || busy || error != null || overview == null) return;
+    final pendingLocal = session.pendingSync;
+    final currentOverview = overview!;
+    final text = '${session.shopName}\n'
+        'سجل المشتريات والمدفوعات\n'
+        '${Exports.rangeLabel(range)}\n'
+        '${selectedParty?['name'] ?? (partyKind == 'Supplier' ? 'الموردون' : partyKind == 'Customer' ? 'الزبائن' : 'كل الحسابات')}\n'
+        '${kind == null ? 'كل الحركات' : (kinds[kind] ?? 'حركة')}\n'
+        'الفواتير: ${money(currentOverview['invoices'])}\n'
+        'المقبوضات المؤكدة: ${money(currentOverview['received'])}\n'
+        'المدفوع للموردين: ${money(currentOverview['paid'])}\n'
+        'حوالات معلّقة غير محتسبة: ${currentOverview['pendingCount'] ?? 0}'
+        '${pendingLocal > 0 ? '\n${ReportExportGuard.pendingNotice(pendingLocal)}' : ''}';
+    try {
+      await Receipts.draft(context, text, '');
+    } catch (e) {
+      if (mounted) message(context, e);
     }
   }
 
@@ -551,12 +606,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final session = Scope.of(context);
-    final canExport =
-        !busy &&
-        !printing &&
-        error == null &&
-        !session.isOffline &&
-        session.pendingSync == 0;
+    final canExport = ReportExportGuard.available(
+      loading: busy,
+      exporting: printing,
+      error: error,
+    );
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -821,10 +875,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
               const SizedBox(height: 14),
             ],
             if (session.isOffline || session.pendingSync > 0)
-              const Surface(
+              Surface(
                 color: paleOrange,
                 child: Text(
-                  'أكمل المزامنة قبل مشاركة التقرير أو طباعته لضمان اكتمال الحركات.',
+                  session.isOffline
+                      ? 'لا يمكن تجهيز تصدير كامل دون اتصال بالخادم. اتصل بالإنترنت ثم أعد تحميل التقرير.'
+                      : ReportExportGuard.pendingNotice(session.pendingSync),
                 ),
               ),
             Row(
@@ -844,23 +900,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     icon: Icons.share_outlined,
                     background: const Color(0xFFECFDF5),
                     foreground: green,
-                    onTap: canExport && overview != null
-                        ? () async {
-                            try {
-                              await Receipts.draft(
-                                context,
-                                '${session.shopName}\nسجل المشتريات والمدفوعات\n${Exports.rangeLabel(range)}\n${selectedParty?['name'] ?? (partyKind == 'Supplier'
-                                        ? 'الموردون'
-                                        : partyKind == 'Customer'
-                                        ? 'الزبائن'
-                                        : 'كل الحسابات')}\n${kind == null ? 'كل الحركات' : kinds[kind]}\nالفواتير: ${money(overview!['invoices'])}\nالمقبوضات المؤكدة: ${money(overview!['received'])}\nالمدفوع للموردين: ${money(overview!['paid'])}\nحوالات معلّقة غير محتسبة: ${overview!['pendingCount'] ?? 0}',
-                                '',
-                              );
-                            } catch (e) {
-                              if (context.mounted) message(context, e);
-                            }
-                          }
-                        : null,
+                    onTap: canExport && overview != null ? shareSummary : null,
                   ),
                 ),
               ],

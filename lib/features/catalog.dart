@@ -879,6 +879,7 @@ class _PartyFormState extends State<PartyForm> {
         '${widget.existing == null ? 'إضافة' : 'تعديل'} ${widget.supplier ? 'مورد' : 'زبون'}',
     body: Width(
       child: ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.all(16),
         children: [
           Form(
@@ -1106,6 +1107,11 @@ class _SupplierDetailState extends State<SupplierDetail> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              if (statement['offlinePartial'] == true)
+                Surface(
+                  color: paleOrange,
+                  child: const Text('هذا كشف محلي جزئي؛ المعاملات السابقة التي لم تُحمّل على الجهاز تحتاج اتصالًا لعرضها.'),
+                ),
               Surface(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1305,12 +1311,17 @@ class _PartyDetailState extends State<PartyDetail> {
                 child: ListView(
                   padding: const EdgeInsets.all(20),
                   children: [
+                    if (data!['offlinePartial'] == true)
+                      Surface(
+                        color: paleOrange,
+                        child: const Text('هذا كشف محلي جزئي؛ يلزم الإنترنت لاسترجاع باقي الحركات القديمة.'),
+                      ),
                     Surface(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Heading(
-                            '${data!['party']['name']}',
+                            '${data['party']['name']}',
                             action: IconButton(
                               tooltip: 'تعديل البطاقة',
                               icon: const Icon(Icons.edit_outlined),
@@ -1616,6 +1627,7 @@ class _ProductFormState extends State<ProductForm> {
     title: widget.existing == null ? 'إضافة صنف جديد' : 'تعديل الصنف',
     body: Width(
       child: ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.all(20),
         children: [
           Form(

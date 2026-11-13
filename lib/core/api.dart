@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'storage.dart';
 import 'offline.dart';
+import 'offline_projection.dart';
 
 typedef Json = Map<String, dynamic>;
 const defaultApiBaseUrl = 'https://api-deenbook.runasp.net';
@@ -197,6 +198,206 @@ class Api {
   Future<int> pendingCount() async =>
       (await offlineVault.readOutbox(savedShopId)).length;
 
+  Future<dynamic> _withLocalMovements(
+    String path, Json? query, dynamic raw,
+  ) async {
+    if (_shopId == null || raw is! Map) return raw;
+    final outbox = await offlineVault.readOutbox(_shopId!);
+    if (outbox.isEmpty) {
+      if (path == '/api/transactions' && raw['offlinePartial'] == true) {
+        return OfflineProjection.transactionList(
+          Map<String, dynamic>.from(raw), <Map<String, dynamic>>[], query,
+          <String, String>{},
+        );
+      }
+      return raw;
+    }
+    final entries = OfflineProjection.pendingEntries(outbox);
+    final base = Map<String, dynamic>.from(raw);
+    final kinds = await offlineVault.partyKinds(_shopId!);
+    if (path == '/api/transactions') {
+      return OfflineProjection.transactionList(base, entries, query, kinds);
+    }
+    if (path == '/api/customers' || path == '/api/suppliers') {
+      final kind = path == '/api/customers' ? 'Customer' : 'Supplier';
+      final locallyIndexed = _offlineMode
+          ? await offlineVault.indexedItems(_shopId!, path)
+          : <Map<String, dynamic>>[];
+      final source = locallyIndexed.isNotEmpty
+          ? locallyIndexed
+          : (base['items'] as List? ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      var adjusted = source.map((p) {
+        final id = '${p['id']}';
+        if (kinds[id] != kind) return p;
+        return {...p, 'balance': (p['balance'] as num? ?? 0) +
+            OfflineProjection.partyDelta(id, entries)};
+      }).toList();
+      if (locallyIndexed.isNotEmpty) {
+        final term = '${query?['search'] ?? ''}'.toLowerCase().trim();
+        adjusted = adjusted.where((p) => term.isEmpty ||
+            ['name', 'nickname', 'phone'].any((f) =>
+                '${p[f] ?? ''}'.toLowerCase().contains(term))).toList();
+        final filter = '${query?['filter'] ?? ''}';
+        if (filter == 'debt') adjusted = adjusted.where((p) => (p['balance'] as num? ?? 0) > 0).toList();
+        if (filter == 'credit') adjusted = adjusted.where((p) => (p['balance'] as num? ?? 0) < 0).toList();
+        if (filter == 'settled') adjusted = adjusted.where((p) => (p['balance'] as num? ?? 0) == 0).toList();
+        if (query?['category'] != null) {
+          adjusted = adjusted.where((p) => '${p['category'] ?? ''}' == '${query!['category']}').toList();
+        }
+        if (query?['sort'] == 'balance') {
+          adjusted.sort((a,b) => (b['balance'] as num? ?? 0).compareTo(a['balance'] as num? ?? 0));
+        } else if (query?['sort'] == 'name') {
+          adjusted.sort((a,b) => '${a['name']}'.compareTo('${b['name']}'));
+        }
+        final count = adjusted.length;
+        final page = (query?['page'] as num?)?.toInt() ?? 1;
+        final size = (query?['size'] as num?)?.toInt() ?? 30;
+        return {...base, 'items': adjusted.skip((page-1)*size).take(size).toList(),
+          'total': count, 'offlinePartial': true};
+      }
+      return {...base, 'items': adjusted};
+    }
+    if (path.startsWith('/api/parties/') && path.endsWith('/statement')) {
+      final id = path.split('/')[3];
+      final projected = OfflineProjection.statement(base, id, entries, query);
+      if (base['party'] is Map) {
+        final party = Map<String, dynamic>.from(base['party'] as Map);
+        return {
+          ...projected,
+          'party': {...party, 'balance': (party['balance'] as num? ?? 0) +
+              OfflineProjection.partyDelta(id, entries)},
+        };
+      }
+      return projected;
+    }
+    if (path.startsWith('/api/parties/') && !path.endsWith('/statement')) {
+      final id = path.split('/').last;
+      return {...base, 'balance': (base['balance'] as num? ?? 0) +
+          OfflineProjection.partyDelta(id, entries)};
+    }
+    if (path == '/api/customers/overview' || path == '/api/suppliers/overview') {
+      final kindPath = path.replaceFirst('/overview', '');
+      final parties = await offlineVault.indexedItems(_shopId!, kindPath);
+      var outstandingDifference = 0.0;
+      var owingDifference = 0;
+      var creditDifference = 0;
+      var settledDifference = 0;
+      for (final party in parties) {
+        final old = (party['balance'] as num? ?? 0).toDouble();
+        final next = old + OfflineProjection.partyDelta('${party['id']}', entries);
+        outstandingDifference += (next > 0 ? next : 0) - (old > 0 ? old : 0);
+        if (old > 0) owingDifference--;
+        if (old < 0) creditDifference--;
+        if (old == 0) settledDifference--;
+        if (next > 0) owingDifference++;
+        if (next < 0) creditDifference++;
+        if (next == 0) settledDifference++;
+      }
+      return {
+        ...base,
+        'outstanding': (base['outstanding'] as num? ?? 0) + outstandingDifference,
+        'owing': (base['owing'] as num? ?? 0) + owingDifference,
+        'credit': (base['credit'] as num? ?? 0) + creditDifference,
+        'settled': (base['settled'] as num? ?? 0) + settledDifference,
+      };
+    }
+    if (path == '/api/dashboard') {
+      num receivables = 0, payables = 0;
+      final customers = await offlineVault.indexedItems(_shopId!, '/api/customers');
+      final suppliers = await offlineVault.indexedItems(_shopId!, '/api/suppliers');
+      final seenIds = <String>{};
+      for (final (accounts, kind) in [
+        (customers, 'Customer'), (suppliers, 'Supplier'),
+      ]) {
+        for (final party in accounts) {
+          final id = '${party['id']}';
+          seenIds.add(id);
+          final before = (party['balance'] as num? ?? 0).toDouble();
+          final after = before + OfflineProjection.partyDelta(id, entries);
+          final change = (after > 0 ? after : 0) - (before > 0 ? before : 0);
+          if (kind == 'Customer') receivables += change;
+          if (kind == 'Supplier') payables += change;
+        }
+      }
+      for (final e in entries.where((e) => !seenIds.contains('${e['partyId']}'))) {
+        final kind = kinds['${e['partyId']}'] ??
+          (e['kind'] == 'Purchase' ? 'Supplier' : e['kind'] == 'Debt' ? 'Customer' : '');
+        if (kind == 'Customer') receivables += (e['delta'] as num? ?? 0);
+        if (kind == 'Supplier') payables += (e['delta'] as num? ?? 0);
+      }
+      final latestDebtors = <String, Map<String, dynamic>>{
+        for (final p in customers) '${p['id']}': p,
+        // Prefer a fresh server dashboard row over an older local snapshot.
+        for (final row in (base['topDebtors'] as List? ?? []).whereType<Map>())
+          '${row['id']}': Map<String, dynamic>.from(row),
+      };
+      final debtors = latestDebtors.values.map((p) => {
+        ...p,
+        'balance': (p['balance'] as num? ?? 0) +
+            OfflineProjection.partyDelta('${p['id']}', entries),
+      }).where((p) => (p['balance'] as num? ?? 0) != 0).toList();
+      debtors.sort((a,b) => (b['balance'] as num).abs().compareTo((a['balance'] as num).abs()));
+      final summary = Map<String, dynamic>.from(base['summary'] as Map? ?? {});
+      return {
+        ...base,
+        'summary': {
+          ...summary,
+          'receivables': ((summary['receivables'] as num? ?? 0) + receivables).clamp(0, double.infinity),
+          'payables': ((summary['payables'] as num? ?? 0) + payables).clamp(0, double.infinity),
+        },
+        'topDebtors': debtors.take(5).toList(),
+        'localPendingCount': entries.length,
+      };
+    }
+    return base;
+  }
+
+  /// A timed-out POST may have reached the server. Once the corresponding
+  /// entry is observed in a fresh server read, acknowledge that local record
+  /// rather than counting it twice. Preserve it if the payload differs.
+  Future<void> _reconcileConfirmed(String path, dynamic data) async {
+    if (_shopId == null || data is! Map) return;
+    if (path != '/api/transactions' &&
+        !path.endsWith('/statement')) return;
+    final serverEntries = (path == '/api/transactions'
+        ? data['items'] : data['entries']);
+    if (serverEntries is! List || serverEntries.isEmpty) return;
+    final server = <String, Map<String, dynamic>>{
+      for (final raw in serverEntries.whereType<Map>())
+        if ('${raw['operationId'] ?? ''}'.isNotEmpty)
+          '${raw['operationId']}': Map<String, dynamic>.from(raw),
+    };
+    for (final record in await offlineVault.readOutbox(_shopId!)) {
+      final id = '${record['operationId']}';
+      final saved = server[id];
+      if (saved == null || record['body'] is! Map) continue;
+      final body = Map<String, dynamic>.from(record['body'] as Map);
+      if ('${saved['partyId']}' == '${body['partyId']}' &&
+          '${saved['kind']}' == '${body['kind']}' &&
+          (saved['amount'] as num? ?? -1) == (body['amount'] as num? ?? -2)) {
+        await offlineVault.removeTransaction(_shopId!, id);
+      }
+    }
+  }
+
+  // Cache the primary account lists while online, so search and party selection
+  // keep working after connectivity is lost, even with changed search terms.
+  Future<void> warmOfflineCatalog() async {
+    if (_shopId == null || _access == null || isOffline) return;
+    final tasks = <Future<dynamic>>[
+      get('/api/dashboard'),
+      get('/api/customers/overview'),
+      get('/api/suppliers/overview'),
+      get('/api/products/categories'),
+      get('/api/products', query: {'search': '', 'page': 1, 'size': 100}),
+      for (final path in ['/api/customers', '/api/suppliers'])
+        get(path, query: {'search': '', 'sort': 'name', 'page': 1, 'size': 100}),
+      for (final kind in ['Customer', 'Supplier'])
+        get('/api/transactions', query: {'partyKind': kind, 'page': 1, 'size': 100}),
+    ];
+    await Future.wait(tasks.map((task) => task.catchError((_) => null)));
+  }
+
   /// Returns the number of successfully synchronized operations. Failed
   /// operations are retained, never silently dropped or assigned new IDs.
   Future<int> synchronize() async {
@@ -205,6 +406,25 @@ class Api {
     if (_access == null) throw ApiFailure('الاتصال بالخادم غير متاح للمزامنة.');
     var completed = 0;
     final entries = await offlineVault.readOutbox(_shopId!);
+    // A disconnected app with an empty outbox must still detect that internet
+    // returned. GET requests normally prefer cache while _offlineMode is true.
+    if (_offlineMode &&
+        (entries.isEmpty || entries.every((e) => e['blocked'] == true))) {
+      try {
+        final response = await dio.get(
+          '/api/subscription',
+          options: Options(
+            headers: {'Authorization': 'Bearer $_access'},
+            receiveTimeout: const Duration(seconds: 5),
+            sendTimeout: const Duration(seconds: 5),
+          ),
+        );
+        _setOffline(false);
+        await offlineVault.saveSnapshot(_shopId!, '/api/subscription', null, response.data);
+      } on DioException {
+        // No data is deleted; subsequent periodic retries use the same state.
+      }
+    }
     for (final entry in entries) {
       if (entry['blocked'] == true) continue;
       final body = Map<String, dynamic>.from(entry['body'] as Map);
@@ -298,6 +518,8 @@ class Api {
       final saved = jsonDecode(raw) as Map;
       _refresh = saved['refreshToken'] as String;
       _refreshExpiry = DateTime.parse(saved['refreshTokenExpiresAt'] as String);
+      if (!(_refreshExpiry?.isAfter(DateTime.now()) ?? false) &&
+          await _restoreOfflineIdentity()) return;
       try {
         await refresh();
       } on ApiFailure catch (e) {
@@ -316,6 +538,11 @@ class Api {
     final generation = _generation;
     if (_refresh == null ||
         !(_refreshExpiry?.isAfter(DateTime.now()) ?? false)) {
+      // Do not discard the remembered identity or pending transactions when
+      // disconnected; online reauthentication is still required to sync.
+      if (_shopId != null && await _restoreOfflineIdentity()) {
+        throw ApiFailure('انتهت جلسة الخادم؛ الحركات المحلية محفوظة حتى إعادة تسجيل الدخول.');
+      }
       await clear();
       throw ApiFailure('انتهت الجلسة.', status: 401);
     }
@@ -365,20 +592,44 @@ class Api {
     }
 
     Future<dynamic> snapshotOrThrow(ApiFailure error) async {
-      if (readable && _shopId != null && error.status == null) {
-        final saved = await offlineVault.readSnapshot(_shopId!, path, query);
+      if (readable && _shopId != null &&
+          (error.status == null || error.status! >= 500)) {
+        var saved = await offlineVault.readBestSnapshot(_shopId!, path, query);
+        if (saved == null && path == '/api/transactions') {
+          saved = {'items': <dynamic>[], 'total': 0, 'offlinePartial': true};
+        }
+        if (saved == null && path.startsWith('/api/parties/') &&
+            path.endsWith('/statement')) {
+          final id = path.split('/')[3];
+          final party = await offlineVault.findParty(_shopId!, id);
+          if (party != null) {
+            saved = {
+              'party': party,
+              'openingBalance': party['balance'] ?? 0,
+              'closingBalance': party['balance'] ?? 0,
+              'entries': <dynamic>[],
+              'offlinePartial': true,
+            };
+          }
+        }
         if (saved != null) {
           _setOffline(true);
-          return saved;
+          return _withLocalMovements(path, query, saved);
         }
       }
-      if (queuedTransaction && error.status == null) {
+      if (queuedTransaction && (error.status == null || error.status! >= 500)) {
         _setOffline(true);
         return {'queued': true, 'operationId': transactionBody!['operationId']};
       }
       throw error;
     }
 
+    // An already-offline session should display the durable snapshot
+    // immediately instead of waiting through another network timeout.
+    if (_offlineMode && readable && _shopId != null) {
+      final cached = await offlineVault.readBestSnapshot(_shopId!, path, query);
+      if (cached != null) return _withLocalMovements(path, query, cached);
+    }
     if (_access == null) {
       return snapshotOrThrow(
         ApiFailure('البيانات غير متاحة محلياً. اتصل بالإنترنت أولاً.'),
@@ -412,7 +663,9 @@ class Api {
       if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
       _setOffline(false);
       if (readable && _shopId != null) {
+        await _reconcileConfirmed(path, result.data);
         await offlineVault.saveSnapshot(_shopId!, path, query, result.data);
+        await offlineVault.indexResponse(_shopId!, path, query, result.data);
       }
       if (queuedTransaction) {
         await offlineVault.removeTransaction(
@@ -420,7 +673,7 @@ class Api {
           '${transactionBody!['operationId']}',
         );
       }
-      return result.data;
+      return readable ? _withLocalMovements(path, query, result.data) : result.data;
     } on DioException catch (e) {
       if (e.response?.statusCode == 403 && path != '/api/subscription') {
         onForbidden?.call();

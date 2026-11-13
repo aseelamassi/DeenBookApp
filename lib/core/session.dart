@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'api.dart';
@@ -94,6 +95,7 @@ class Session extends ChangeNotifier {
         ledgerV2 = (await api.storage.read('ledgerV2.$shopId')) == 'true';
         if (active) {
           settings = await api.get('/api/settings');
+          if (!api.isOffline) unawaited(api.warmOfflineCatalog());
           try {
             final capabilities = await api.get('/api/capabilities');
             ledgerV2 = (capabilities['ledgerVersion'] as num? ?? 0) >= 2;
@@ -143,7 +145,9 @@ class Session extends ChangeNotifier {
           // check fails. The next retry can refresh subscription state.
         }
       }
-      if (synced > 0) revision++;
+      // Refresh local projections even if the server rejected an operation;
+      // its blocked/review state is now different.
+      revision++;
       return synced;
     } catch (e) {
       syncError = '$e';

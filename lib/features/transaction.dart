@@ -112,7 +112,7 @@ class TransactionScreen extends StatefulWidget {
 class _TransactionScreenState extends State<TransactionScreen> {
   final form = GlobalKey<FormState>();
   final total = TextEditingController(),
-      paid = TextEditingController(text: '0'),
+      paid = TextEditingController(),
       note = TextEditingController(),
       reference = TextEditingController(),
       invoice = TextEditingController(),
@@ -841,52 +841,64 @@ class _TransactionScreenState extends State<TransactionScreen> {
                             if (isInvoice && !supplier)
                               Surface(
                                 child: ExpansionTile(
+                                  initiallyExpanded: (cents(paid.text) ?? 0) > 0,
                                   maintainState: true,
-                                  tilePadding: EdgeInsets.zero,
+                                  tilePadding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 8,
+                                  ),
+                                  childrenPadding: const EdgeInsets.fromLTRB(
+                                    12,
+                                    12,
+                                    12,
+                                    20,
+                                  ),
+                                  shape: const Border(),
+                                  collapsedShape: const Border(),
                                   title: Text(
-                                    'خصم أو دفعة مع المشتريات (اختياري)',
-                                    style: appText(12, weight: FontWeight.w800),
+                                    'دفعة مع المشتريات (اختياري)',
+                                    style: appText(
+                                      13,
+                                      weight: FontWeight.w800,
+                                    ),
                                   ),
                                   children: [
-                                    if (modern)
-                                      field(
-                                        discount,
-                                        'الخصم — شيكل',
-                                        keyboard:
-                                            const TextInputType.numberWithOptions(
-                                              decimal: true,
-                                            ),
-                                        validator: (v) {
-                                          final n = cents(v ?? '');
-                                          return n == null || n >= gross
-                                              ? 'الخصم من صفر إلى أقل من قيمة الفاتورة'
-                                              : null;
-                                        },
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Text(
+                                        'المبلغ المدفوع من الزبون — شيكل',
+                                        style: appText(
+                                          12,
+                                          weight: FontWeight.w700,
+                                        ),
                                       ),
-                                    field(
-                                      paid,
-                                      supplier
-                                          ? 'المبلغ المدفوع للمورد — شيكل'
-                                          : 'المبلغ المدفوع من الزبون — شيكل',
-                                      keyboard:
+                                    ),
+                                    const SizedBox(height: 12),
+                                    TextFormField(
+                                      key: const Key('customer-debt-paid-now'),
+                                      controller: paid,
+                                      textAlign: TextAlign.right,
+                                      keyboardType:
                                           const TextInputType.numberWithOptions(
                                             decimal: true,
                                           ),
-                                      validator: (v) {
-                                        final n = cents(v ?? '');
-                                        return n == null ||
-                                                ((supplier || !modern) &&
-                                                    n > net)
-                                            ? 'أدخل دفعة صحيحة لا تتجاوز صافي فاتورة المورد'
+                                      decoration: const InputDecoration(
+                                        hintText: 'أدخل مبلغ الدفعة إن وُجد',
+                                        contentPadding: EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 16,
+                                        ),
+                                      ),
+                                      validator: (value) {
+                                        if (value == null ||
+                                            value.trim().isEmpty) {
+                                          return null;
+                                        }
+                                        return cents(value) == null
+                                            ? 'أدخل مبلغًا صحيحًا بالشيكل'
                                             : null;
                                       },
                                     ),
-                                    if (!supplier)
-                                      field(
-                                        invoice,
-                                        'رقم الفاتورة (اختياري)',
-                                        max: 100,
-                                      ),
                                   ],
                                 ),
                               ),

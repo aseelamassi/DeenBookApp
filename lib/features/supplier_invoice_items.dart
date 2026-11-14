@@ -101,24 +101,23 @@ class _SupplierInvoiceItemsState extends State<SupplierInvoiceItems> {
           const SizedBox(height: 10),
           Text('إضافة سريعة من الأصناف المتكررة (اختصار للإدراج):',
               style: appText(11, weight: FontWeight.w700)),
-          const SizedBox(height: 6),
-          SizedBox(
-            height: 38,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: _quickTemplates.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 6),
-              itemBuilder: (_, index) {
-                final item = _quickTemplates[index];
-                return ActionChip(
+          const SizedBox(height: 8),
+          // Let quick-add chips wrap instead of clipping the third chip
+          // outside the phone's viewport. Only their layout changes.
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              for (final item in _quickTemplates)
+                ActionChip(
                   label: Text('+ ${item['name']}'),
+                  visualDensity: VisualDensity.compact,
                   onPressed: () => _addTemplate(item['name']!, item['unit']!),
-                );
-              },
-            ),
+                ),
+            ],
           ),
           for (var i = 0; i < widget.lines.length; i++) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 14),
             _SupplierLineCard(
               key: ValueKey('supplier-line-${widget.lines[i].id}'),
               line: widget.lines[i],
@@ -287,7 +286,7 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
     );
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
       decoration: BoxDecoration(
         color: const Color(0xFFF8F9FD),
         borderRadius: BorderRadius.circular(16),
@@ -315,7 +314,7 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 12),
           Text('اسم الصنف', style: appText(11, weight: FontWeight.w800)),
           const SizedBox(height: 7),
           TextFormField(

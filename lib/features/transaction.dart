@@ -1003,10 +1003,11 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                   key: const Key('supplier-invoice-partial-payment'),
                                   initiallyExpanded: (cents(paid.text) ?? 0) > 0,
                                   maintainState: true,
-                                  tilePadding: EdgeInsets.zero,
-                                  childrenPadding: const EdgeInsets.only(
-                                    top: 20,
-                                    bottom: 10,
+                                  tilePadding: const EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
+                                  childrenPadding: const EdgeInsets.fromLTRB(
+                                    4, 28, 4, 14,
                                   ),
                                   title: Text(
                                     'دفعت جزءًا من الفاتورة للمورد الآن؟',
@@ -1028,7 +1029,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                           style: appText(11, weight: FontWeight.w800),
                                         ),
                                       ),
-                                      const SizedBox(height: 9),
+                                      const SizedBox(height: 12),
                                       TextFormField(
                                         controller: discount,
                                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -1036,7 +1037,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                         decoration: const InputDecoration(
                                           hintText: '0.00',
                                           contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 16, vertical: 15,
+                                            horizontal: 16, vertical: 18,
                                           ),
                                         ),
                                         validator: (value) {
@@ -1047,7 +1048,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                               : null;
                                         },
                                       ),
-                                      const SizedBox(height: 18),
+                                      const SizedBox(height: 22),
                                     ],
                                     Align(
                                       alignment: Alignment.centerRight,
@@ -1056,7 +1057,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                         style: appText(11, weight: FontWeight.w800),
                                       ),
                                     ),
-                                    const SizedBox(height: 9),
+                                    const SizedBox(height: 12),
                                     TextFormField(
                                       key: const Key('supplier-invoice-paid-amount'),
                                       controller: paid,
@@ -1065,7 +1066,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                       decoration: const InputDecoration(
                                         hintText: '0.00',
                                         contentPadding: EdgeInsets.symmetric(
-                                          horizontal: 16, vertical: 15,
+                                          horizontal: 16, vertical: 18,
                                         ),
                                       ),
                                       validator: (value) {
@@ -1076,7 +1077,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                             : null;
                                       },
                                     ),
-                                    const SizedBox(height: 18),
+                                    const SizedBox(height: 22),
                                     // Keep all three shortcuts on ONE row, with
                                     // two-line labels allowed on small phones.
                                     Row(
@@ -1088,14 +1089,15 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                               (net.clamp(0, 99999999900).toInt() + 1) ~/ 2,
                                             ),
                                             style: OutlinedButton.styleFrom(
-                                              minimumSize: const Size(0, 54),
-                                              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+                                              minimumSize: const Size(0, 60),
+                                              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 10),
                                             ),
                                             child: Text(
                                               'دفع النصف 50%',
                                               textAlign: TextAlign.center,
                                               maxLines: 2,
-                                              style: appText(10, weight: FontWeight.w800),
+                                              softWrap: true,
+                                              style: appText(10, weight: FontWeight.w800, height: 1.25),
                                             ),
                                           ),
                                         ),
@@ -1107,14 +1109,15 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                               net.clamp(0, 99999999900).toInt(),
                                             ),
                                             style: OutlinedButton.styleFrom(
-                                              minimumSize: const Size(0, 54),
-                                              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+                                              minimumSize: const Size(0, 60),
+                                              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 10),
                                             ),
                                             child: Text(
                                               'دفع كامل الفاتورة',
                                               textAlign: TextAlign.center,
                                               maxLines: 2,
-                                              style: appText(10, weight: FontWeight.w800),
+                                              softWrap: true,
+                                              style: appText(10, weight: FontWeight.w800, height: 1.25),
                                             ),
                                           ),
                                         ),
@@ -1124,14 +1127,15 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                             key: const Key('supplier-pay-later'),
                                             onPressed: () => paid.clear(),
                                             style: OutlinedButton.styleFrom(
-                                              minimumSize: const Size(0, 54),
-                                              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+                                              minimumSize: const Size(0, 60),
+                                              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 10),
                                             ),
                                             child: Text(
                                               'آجل بالكامل',
                                               textAlign: TextAlign.center,
                                               maxLines: 2,
-                                              style: appText(10, weight: FontWeight.w800),
+                                              softWrap: true,
+                                              style: appText(10, weight: FontWeight.w800, height: 1.25),
                                             ),
                                           ),
                                         ),

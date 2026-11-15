@@ -12,6 +12,8 @@ import '../services/export.dart';
 import '../ui/theme.dart';
 import '../ui/design.dart';
 import '../ui/widgets.dart';
+import '../ui/credit_limit.dart';
+import '../core/credit_limit.dart';
 import 'transaction.dart';
 
 class CatalogScreen extends StatefulWidget {
@@ -145,6 +147,9 @@ class _CatalogScreenState extends State<CatalogScreen> {
   Widget accountCard(Json p) {
     final value = (p['balance'] as num? ?? 0);
     final credit = value < 0;
+    final ceiling = creditLimitStatus(value, supplier ? null : p['creditLimit']);
+    final alert = !supplier && ceiling.needsWarning;
+    final warningColor = ceiling.level == CreditLimitLevel.exceeded ? creditDarkRed : creditRose;
     final status = value == 0
         ? 'خالص ✓'
         : credit
@@ -153,7 +158,13 @@ class _CatalogScreenState extends State<CatalogScreen> {
         ? 'لهم مستحقات'
         : 'عليه دين';
     return Surface(
-      child: Column(
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: alert ? warningColor : Colors.transparent, width: alert ? 1.5 : 0),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        padding: alert ? const EdgeInsets.all(6) : EdgeInsets.zero,
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           InkWell(
@@ -172,11 +183,17 @@ class _CatalogScreenState extends State<CatalogScreen> {
                       const SizedBox(height: 4),
                       if (!supplier)
                         SoftTag(
-                          status,
-                          color: credit ? green : orange,
-                          background: credit
+                          alert ? ceiling.label : status,
+                          color: alert ? warningColor : credit ? green : orange,
+                          background: alert ? creditRosePale : credit
                               ? const Color(0xFFECFDF5)
                               : paleOrange,
+                        ),
+                      if (!supplier)
+                        CreditLimitGauge(
+                          balance: value,
+                          creditLimit: p['creditLimit'],
+                          compact: true,
                         ),
                       if ('${p['phone'] ?? ''}'.isNotEmpty)
                         Text(
@@ -207,9 +224,9 @@ class _CatalogScreenState extends State<CatalogScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF7F8FB),
+                    color: alert ? creditRosePale : const Color(0xFFF7F8FB),
                     borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: lineColor),
+                    border: Border.all(color: alert ? warningColor : lineColor),
                   ),
                   child: Column(
                     children: [
@@ -219,11 +236,12 @@ class _CatalogScreenState extends State<CatalogScreen> {
                           child: amount(
                             value.abs(),
                             size: 16,
-                            color: credit ? green : orange,
+                            color: alert ? warningColor : credit ? green : orange,
                           ),
                         ),
                       ),
-                      Text(status, style: appText(10, color: muted)),
+                      Text(alert ? ceiling.label : status,
+                          style: appText(10, color: alert ? warningColor : muted)),
                     ],
                   ),
                 ),
@@ -278,6 +296,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
             ),
           ],
         ],
+        ),
       ),
     );
   }
@@ -666,6 +685,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
                   'debt': 'عليهم دين ${overview?['owing'] ?? 0}',
                   'credit': 'لهم رصيد ${overview?['credit'] ?? 0}',
                   'scheduled': 'بموعد محدد ${overview?['scheduled'] ?? 0}',
+                  'creditLimit': 'قرب/تجاوز السقف 🔴 ${overview?['nearCreditLimit'] ?? 0}',
                   'settled': 'خالص ✓ ${overview?['settled'] ?? 0}',
                 },
                 selected: filter,
@@ -824,6 +844,11 @@ class _PartyFormState extends State<PartyForm> {
     fields['openingBalance']!.text = decimalMoney(
       amountCents(widget.existing?['openingBalance']).abs(),
     );
+    fields['creditLimit'] = TextEditingController(
+      text: widget.existing?['creditLimit'] is num && (widget.existing!['creditLimit'] as num) > 0
+          ? '${widget.existing!['creditLimit']}'
+          : '',
+    );
     agreement = fields['paymentSchedule']!.text.isNotEmpty;
   }
 
@@ -845,8 +870,11 @@ class _PartyFormState extends State<PartyForm> {
     try {
       final body = <String, dynamic>{
         for (final e in fields.entries)
-          if (modern || !['alternatePhone', 'alternateContact'].contains(e.key))
+          if (e.key != 'creditLimit' &&
+              (modern || !['alternatePhone', 'alternateContact'].contains(e.key)))
             e.key: e.value.text.trim(),
+        if (!widget.supplier && session.isOwner)
+          'creditLimit': (cents(fields['creditLimit']!.text.trim()) ?? 0) / 100,
         'openingBalance':
             widget.existing?['openingBalance'] ??
             (cents(fields['openingBalance']!.text)! *
@@ -967,6 +995,11 @@ class _PartyFormState extends State<PartyForm> {
                   ),
                 ],
                 if (!widget.supplier) ...[
+                  if (Scope.of(context).isOwner) ...[
+                    const SizedBox(height: 16),
+                    CreditLimitPicker(controller: fields['creditLimit']!),
+                    const SizedBox(height: 12),
+                  ],
                   CheckboxListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('يوجد اتفاق على موعد الدفع'),
@@ -1245,6 +1278,56 @@ class _PartyDetailState extends State<PartyDetail> {
     query: range == null ? null : period(range!.start, range!.end),
   );
   void refresh() => setState(() => future = load());
+
+  Future<void> _editCreditLimit(Json party) async {
+    final initial = party['creditLimit'];
+    final controller = TextEditingController(
+      text: initial is num && initial > 0 ? '$initial' : '',
+    );
+    final formKey = GlobalKey<FormState>();
+    try {
+      final chosen = await showDialog<double>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('تعديل سقف الدين'),
+          content: SingleChildScrollView(
+            child: Form(
+              key: formKey,
+              child: CreditLimitPicker(controller: controller),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (!formKey.currentState!.validate()) return;
+                Navigator.pop(dialogContext, (cents(controller.text) ?? 0) / 100);
+              },
+              child: const Text('حفظ السقف'),
+            ),
+          ],
+        ),
+      );
+      if (chosen == null || !mounted) return;
+      await Scope.of(context).api.request(
+        'PATCH',
+        '/api/customers/${widget.id}/credit-limit',
+        body: {'creditLimit': chosen},
+      );
+      if (!mounted) return;
+      Scope.of(context).changed();
+      refresh();
+      message(context, 'تم تحديث سقف الدين');
+    } catch (error) {
+      if (mounted) message(context, 'تعذر تحديث السقف: $error');
+    } finally {
+      controller.dispose();
+    }
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<Json>(
     future: future,
@@ -1351,6 +1434,22 @@ class _PartyDetailState extends State<PartyDetail> {
                             ),
                           ),
                           amount((data['party']['balance'] as num).abs()),
+                          if (data['party']['kind'] == 'Customer') ...[
+                            CreditLimitGauge(
+                              balance: (data['party']['balance'] as num? ?? 0),
+                              creditLimit: data['party']['creditLimit'],
+                              showUnlimited: true,
+                            ),
+                            if (Scope.of(context).isOwner)
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton.icon(
+                                  onPressed: () => _editCreditLimit(Map<String, dynamic>.from(data['party'])),
+                                  icon: const Icon(Icons.edit_outlined, size: 18),
+                                  label: const Text('تعديل السقف'),
+                                ),
+                              ),
+                          ],
                           for (final key in ['phone', 'alternatePhone'])
                             if ('${data['party'][key] ?? ''}'.isNotEmpty)
                               TextButton.icon(

@@ -134,6 +134,12 @@ class OfflineVault {
       if (filter == 'debt') matches = matches.where((r) => (r['balance'] as num? ?? 0) > 0).toList();
       if (filter == 'credit') matches = matches.where((r) => (r['balance'] as num? ?? 0) < 0).toList();
       if (filter == 'settled') matches = matches.where((r) => (r['balance'] as num? ?? 0) == 0).toList();
+      if (filter == 'creditLimit' && path == '/api/customers') {
+        matches = matches.where((r) {
+          final limit = (r['creditLimit'] as num?) ?? 0;
+          return limit > 0 && (r['balance'] as num? ?? 0) >= limit * .8;
+        }).toList();
+      }
       if (query?['category'] != null) {
         matches = matches.where((r) => '${r['category'] ?? ''}' == '${query!['category']}').toList();
       }

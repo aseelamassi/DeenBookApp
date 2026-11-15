@@ -8,6 +8,8 @@ import '../core/ledger.dart';
 import '../core/supplier_invoice_note.dart';
 import '../services/receipts.dart';
 import 'invoice_items.dart';
+import '../core/credit_limit.dart';
+import '../ui/credit_limit.dart';
 import 'supplier_invoice_items.dart';
 import '../core/session.dart';
 import '../core/storage.dart';
@@ -1474,6 +1476,34 @@ class _TransactionScreenState extends State<TransactionScreen> {
                           value: receipt,
                           onChanged: (v) => setState(() => receipt = v!),
                         ),
+                      if (isCustomerDebt && party != null) ...[
+                        Builder(builder: (context) {
+                          final balance = (party!['balance'] as num? ?? 0).toDouble();
+                          final projected = balance + (net - actualPayment) / 100;
+                          final status = creditLimitStatus(projected, party!['creditLimit']);
+                          if (!status.needsWarning) return const SizedBox.shrink();
+                          return Surface(
+                            color: creditRosePale,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Text('⚠️ ${status.label}', style: appText(13, weight: FontWeight.w900,
+                                    color: status.level == CreditLimitLevel.exceeded ? creditDarkRed : creditRose)),
+                                const SizedBox(height: 6),
+                                Text('دين الزبون المتوقع: ${displayMoney(projected)} · السقف المحدد: ${displayMoney(status.limit!)}',
+                                    style: appText(11, color: creditDarkRed)),
+                                Text(status.excess > 0
+                                    ? 'تجاوز السقف بمقدار ${displayMoney(status.excess)}'
+                                    : 'المتبقي من السقف: ${displayMoney(status.remaining)}',
+                                    style: appText(11, color: creditDarkRed)),
+                                const SizedBox(height: 4),
+                                Text('تحذير فقط: يمكنك اعتماد وحفظ البيعة.',
+                                    style: appText(10, color: creditRose)),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
                       if (error != null)
                         Text(error!, style: const TextStyle(color: Colors.red)),
                     ],

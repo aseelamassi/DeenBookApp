@@ -11,6 +11,8 @@ import '../core/format.dart';
 import '../services/export.dart';
 import '../ui/widgets.dart';
 import 'catalog.dart';
+import '../core/credit_limit.dart';
+import '../ui/credit_limit.dart';
 import 'profile.dart';
 import 'reports.dart';
 import 'transaction.dart';
@@ -516,9 +518,13 @@ class HomeScreen extends StatelessWidget {
                                 margin: const EdgeInsets.only(bottom: 6),
                                 padding: const EdgeInsets.all(14),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFF7F8FB),
+                                  color: creditLimitStatus((p['balance'] as num?) ?? 0, p['creditLimit']).needsWarning
+                                      ? creditRosePale : const Color(0xFFF7F8FB),
                                   borderRadius: BorderRadius.circular(18),
-                                  border: Border.all(color: lineColor),
+                                  border: Border.all(
+                                    color: creditLimitStatus((p['balance'] as num?) ?? 0, p['creditLimit']).needsWarning
+                                        ? creditRose : lineColor,
+                                  ),
                                 ),
                                 child: InkWell(
                                   onTap: () =>
@@ -536,6 +542,11 @@ class HomeScreen extends StatelessWidget {
                                                 14,
                                                 weight: FontWeight.w800,
                                               ),
+                                            ),
+                                            CreditLimitGauge(
+                                              balance: (p['balance'] as num? ?? 0),
+                                              creditLimit: p['creditLimit'],
+                                              compact: true,
                                             ),
                                             if ('${p['paymentSchedule'] ?? ''}'
                                                 .isNotEmpty)
@@ -555,13 +566,15 @@ class HomeScreen extends StatelessWidget {
                                           amount(
                                             ((p['balance'] as num?) ?? 0).abs(),
                                             size: 16,
-                                            color: ((p['balance'] as num?) ?? 0) < 0
+                                            color: creditLimitStatus((p['balance'] as num?) ?? 0, p['creditLimit']).needsWarning
+                                                ? creditRose
+                                                : ((p['balance'] as num?) ?? 0) < 0
                                                 ? green : orange,
                                           ),
                                           Text(
-                                            customerBalanceStatus(
-                                              (p['balance'] as num?) ?? 0,
-                                            ),
+                                            creditLimitStatus((p['balance'] as num?) ?? 0, p['creditLimit']).needsWarning
+                                                ? creditLimitStatus((p['balance'] as num?) ?? 0, p['creditLimit']).label
+                                                : customerBalanceStatus((p['balance'] as num?) ?? 0),
                                             style: appText(10,
                                                 color: ((p['balance'] as num?) ?? 0) < 0
                                                     ? green : muted),

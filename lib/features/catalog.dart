@@ -14,6 +14,7 @@ import '../ui/design.dart';
 import '../ui/widgets.dart';
 import '../ui/credit_limit.dart';
 import '../core/credit_limit.dart';
+import '../core/weight_pricing.dart';
 import 'transaction.dart';
 
 class CatalogScreen extends StatefulWidget {
@@ -492,9 +493,10 @@ class _CatalogScreenState extends State<CatalogScreen> {
                   style: appText(14, weight: FontWeight.w900),
                 ),
                 Text(
-                  '${displayMoney(p['salePrice'])} / ${p['unit']}',
+                  '${displayMoney(p['salePrice'])} / ${soldByWeight(p) ? 'كيلو' : p['unit']}',
                   style: appText(12, color: navy, weight: FontWeight.w800),
                 ),
+                Text('${p['category'] ?? 'عام'} · ${soldByWeight(p) ? '⚖️ بالوزن' : '📦 بالقطعة'}', style: appText(10, color: muted)),
               ],
             ),
           ),
@@ -1666,9 +1668,12 @@ class _ProductFormState extends State<ProductForm> {
   final fields = <String, TextEditingController>{};
   bool busy = false;
   String? error;
+  late String pricingMode;
+  static const shopCategories = ['مواد تموينية وبقوليات', 'ألبان وأجبان', 'مكسرات وبزورات', 'خضار وفواكه', 'لحوم ودواجن', 'مخبوزات', 'منظفات', 'عام'];
   @override
   void initState() {
     super.initState();
+    pricingMode = soldByWeight(widget.existing ?? {}) ? 'Weight' : 'Piece';
     for (final k in [
       'name',
       'unit',
@@ -1706,6 +1711,7 @@ class _ProductFormState extends State<ProductForm> {
         widget.existing == null ? 'POST' : 'PUT',
         '/api/products${widget.existing == null ? '' : '/${widget.existing!['id']}'}',
         body: {
+          'pricingMode': pricingMode,
           for (final e in fields.entries)
             e.key: e.key.endsWith('Price')
                 ? cents(e.value.text)! / 100
@@ -1735,22 +1741,59 @@ class _ProductFormState extends State<ProductForm> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 field(fields['name']!, 'اسم الصنف', required: true),
+                const SizedBox(height: 14),
+                Text('القسم التجاري', style: appText(12, weight: FontWeight.w800)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final category in shopCategories)
+                      ChoiceChip(
+                        label: Text(category),
+                        selected: fields['category']!.text == category,
+                        onSelected: (_) => setState(() => fields['category']!.text = category),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text('طريقة البيع والتسعير', style: appText(12, weight: FontWeight.w800)),
+                const SizedBox(height: 8),
+                Segments<String>(
+                  items: const {
+                    'Weight': '⚖️ بالوزن (سعر الكيلو)',
+                    'Piece': '📦 بالقطعة / العبوة',
+                  },
+                  selected: pricingMode,
+                  onSelected: (mode) => setState(() {
+                    pricingMode = mode;
+                    if (mode == 'Weight') fields['unit']!.text = 'كغم';
+                    if (mode == 'Piece' && fields['unit']!.text == 'كغم') fields['unit']!.text = 'قطعة';
+                  }),
+                ),
+                const SizedBox(height: 14),
                 field(
                   fields['salePrice']!,
-                  'سعر البيع — شيكل',
+                  pricingMode == 'Weight' ? 'سعر الكيلو الواحد (₪)' : 'سعر القطعة / العبوة (₪)',
                   keyboard: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
                   validator: (v) =>
-                      cents(v ?? '') == null ? 'أدخل سعراً صحيحاً' : null,
+                      (cents(v ?? '') ?? 0) <= 0 ? 'أدخل سعر بيع أكبر من صفر' : null,
                 ),
+                if (pricingMode == 'Weight')
+                  Text(
+                    'يحسب التطبيق سعر ربع كيلو ونصف كيلو، أو الوزن بالغرام عند البيع بمبلغ محدد.',
+                    style: appText(11, color: muted),
+                  ),
+                if (pricingMode == 'Piece') ...[
                 Text('وحدة البيع', style: appText(12, weight: FontWeight.w800)),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    for (final unit in ['قطعة', 'كغم', 'ربطة', 'كرتونة', 'لتر'])
+                    for (final unit in ['قطعة', 'علبة', 'ربطة', 'كرتونة', 'لتر'])
                       DesignButton(
                         unit,
                         height: 34,
@@ -1765,6 +1808,7 @@ class _ProductFormState extends State<ProductForm> {
                       ),
                   ],
                 ),
+                ],
                 const SizedBox(height: 16),
                 ExpansionTile(
                   tilePadding: EdgeInsets.zero,
@@ -1774,7 +1818,7 @@ class _ProductFormState extends State<ProductForm> {
                     style: appText(12, weight: FontWeight.w800),
                   ),
                   children: [
-                    field(fields['unit']!, 'الوحدة', required: true, max: 30),
+                    if (pricingMode == 'Piece') field(fields['unit']!, 'الوحدة', required: true, max: 30),
                     field(
                       fields['category']!,
                       'التصنيف',

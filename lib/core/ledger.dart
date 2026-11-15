@@ -1,6 +1,7 @@
 import 'package:uuid/uuid.dart';
 import 'api.dart';
 import 'format.dart';
+import 'weight_pricing.dart';
 
 int amountCents(dynamic value) => ((value as num? ?? 0) * 100).round();
 String decimalMoney(int value) => (value / 100).toStringAsFixed(2);
@@ -25,9 +26,11 @@ class InvoiceLine {
     required this.unit,
     required this.price,
     required this.quantity,
+    this.byAmount = false,
   });
   final String id, name, unit;
   final int price, quantity;
+  final bool byAmount;
   int get total => (price * quantity + 500) ~/ 1000;
   InvoiceLine withQuantity(int value) => InvoiceLine(
     id: id,
@@ -35,6 +38,7 @@ class InvoiceLine {
     unit: unit,
     price: price,
     quantity: value,
+    byAmount: byAmount,
   );
   InvoiceLine withPrice(int value) => InvoiceLine(
     id: id,
@@ -42,6 +46,7 @@ class InvoiceLine {
     unit: unit,
     price: value,
     quantity: quantity,
+    byAmount: byAmount,
   );
   InvoiceLine withUnit(String value) => InvoiceLine(
     id: id,
@@ -49,6 +54,7 @@ class InvoiceLine {
     unit: value,
     price: price,
     quantity: quantity,
+    byAmount: byAmount,
   );
   InvoiceLine withName(String value) => InvoiceLine(
     id: id,
@@ -56,6 +62,15 @@ class InvoiceLine {
     unit: unit,
     price: price,
     quantity: quantity,
+    byAmount: byAmount,
+  );
+  InvoiceLine withPricingEntry({required bool byAmount}) => InvoiceLine(
+    id: id,
+    name: name,
+    unit: unit,
+    price: price,
+    quantity: quantity,
+    byAmount: byAmount,
   );
   factory InvoiceLine.product(Json p, bool purchase) => InvoiceLine(
     id: p['id'],
@@ -75,6 +90,7 @@ class InvoiceLine {
     unit: p['unit'],
     price: amountCents(p['unitPrice']),
     quantity: ((p['quantity'] as num) * 1000).round(),
+    byAmount: p['byAmount'] == true,
   );
   // Invoice-only wholesale lines must never reference the retail catalog.
   Json toSupplierInvoiceJson() => {
@@ -88,6 +104,7 @@ class InvoiceLine {
     'unitPrice': price / 100,
     'quantity': quantity / 1000,
     'total': total / 100,
+    if (byAmount) 'byAmount': true,
   };
 }
 
@@ -114,7 +131,11 @@ String entryDescription(Json e) => [
   if (amountCents(e['discount']) > 0) 'خصم: ${money(e['discount'])}',
   if ((e['note'] ?? '').toString().isNotEmpty) '${e['note']}',
   for (final p in (e['items'] as List? ?? []))
-    '${p['name']} · ${quantityText(((p['quantity'] as num) * 1000).round())} ${p['unit']} · ${money(p['total'])}',
+    p['unit'] == 'كغم'
+        ? p['byAmount'] == true
+            ? '${p['name']} (بـ ${money(p['total'])} = ${weightLabel(((p['quantity'] as num) * 1000).round())})'
+            : '${p['name']} (${weightLabel(((p['quantity'] as num) * 1000).round())} = ${money(p['total'])})'
+        : '${p['name']} · ${quantityText(((p['quantity'] as num) * 1000).round())} ${p['unit']} · ${money(p['total'])}',
   if ((e['createdByName'] ?? '').toString().isNotEmpty)
     'سجّلها: ${e['createdByName']}',
 ].join('\n');

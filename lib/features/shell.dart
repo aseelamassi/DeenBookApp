@@ -17,6 +17,7 @@ import 'profile.dart';
 import 'reports.dart';
 import 'transaction.dart';
 import 'sync_center.dart';
+import 'support_screen.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -897,6 +898,12 @@ class ShopDrawer extends StatelessWidget {
                     'طباعة وتصدير الحركات',
                     Icons.bar_chart_rounded,
                     () => go(const HistoryScreen()),
+                  ),
+                  tile(
+                    'الدعم الفني',
+                    'اتصال أو واتساب · لؤي أبو زعنونة',
+                    Icons.support_agent_outlined,
+                    () => go(const TechnicalSupportScreen()),
                   ),
                   tile(
                     'تصدير نسخة احتياطية محلية',

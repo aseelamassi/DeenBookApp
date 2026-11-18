@@ -190,7 +190,9 @@ class BrandHeader extends StatelessWidget {
           IconButton(
             onPressed: () => Navigator.maybePop(c),
             tooltip: 'رجوع',
-            icon: const Icon(Icons.chevron_right),
+            // BackButtonIcon resolves the glyph with the current text direction:
+            // in Arabic it points right, while in LTR layouts it points left.
+            icon: const BackButtonIcon(),
           ),
         Container(
           width: 44,

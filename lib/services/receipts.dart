@@ -43,7 +43,7 @@ class Receipts {
     String shop,
   ) => draft(
     context,
-    '$shop\n${e['pendingConfirmation'] == true ? 'حوالة بانتظار الوصول — ليست إيصال قبض' : 'تم تسجيل الدفعة'}\n${party['name']}\n${money(e['amount'])} · ${day(e['occurredAt'])}\nرقم الحركة: ${e['id']}',
+    '$shop\n${e['pendingConfirmation'] == true ? 'حوالة بانتظار الوصول — ليست إيصال قبض' : 'تم تسجيل الدفعة'}\n${party['name']}\n${money(e['amount'])} · ${dateTimeStamp(e['occurredAt'])}\nرقم الحركة: ${e['id']}',
     '${party['phone'] ?? ''}',
   );
   static Future<void> statement(
@@ -52,7 +52,7 @@ class Receipts {
     String shop,
   ) => draft(
     context,
-    '$shop\nكشف حساب ${s['party']['name']}\nرصيد بداية الفترة: ${money(s['openingBalance'])}\n${(s['entries'] as List).map((e) => '${day(e['occurredAt'])} · ${kinds[e['kind']]} · ${money((e['amount'] as num) - (e['discount'] as num? ?? 0))}${e['pendingConfirmation'] == true ? ' (بانتظار التأكيد)' : ''}').join('\n')}\nرصيد نهاية الفترة: ${money(s['closingBalance'])}',
+    '$shop\nكشف حساب ${s['party']['name']}\nرصيد بداية الفترة: ${money(s['openingBalance'])}\n${(s['entries'] as List).map((e) => '${dateTimeStamp(e['occurredAt'])} · ${kinds[e['kind']]} · ${money((e['amount'] as num) - (e['discount'] as num? ?? 0))}${e['pendingConfirmation'] == true ? ' (بانتظار التأكيد)' : ''}').join('\n')}\nرصيد نهاية الفترة: ${money(s['closingBalance'])}',
     '${s['party']['phone'] ?? ''}',
   );
   static Future<bool> confirmTransfer(BuildContext context, Json entry) async {

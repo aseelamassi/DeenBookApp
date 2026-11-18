@@ -308,7 +308,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                               title: Text('${row['partyName']} · ${money(e['amount'])}',
                                   style: appText(12, weight: FontWeight.w800)),
                               subtitle: Text([
-                                day(e['occurredAt']),
+                                dateTimeStamp(e['occurredAt']),
                                 if ('${e['counterpartyName'] ?? ''}'.trim().isNotEmpty)
                                   'اللي إجا اشترى: ${e['counterpartyName']}',
                                 if (lines.isNotEmpty)

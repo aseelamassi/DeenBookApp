@@ -870,7 +870,7 @@ class _WorkersScreenState extends State<WorkersScreen> {
         leading: s.workerSetup ? IconButton(
           tooltip: 'بدء استخدام التطبيق',
           onPressed: s.finishWorkerSetup,
-          icon: const Icon(Icons.arrow_back)) : null),
+          icon: const BackButtonIcon()) : null),
       body: Width(child: ListView(padding: const EdgeInsets.all(16), children: [
         BrandCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('فريق المحل', style: appText(19, color: Colors.white, weight: FontWeight.w900)),

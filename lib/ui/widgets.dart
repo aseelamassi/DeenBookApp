@@ -285,7 +285,7 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   Text(
-                    '${supplierInvoice ? 'فاتورة توريد' : kinds[e['kind']] ?? ''} · ${day(e['occurredAt'])}'
+                    '${supplierInvoice ? 'فاتورة توريد' : kinds[e['kind']] ?? ''} · ${dateTimeStamp(e['occurredAt'])}'
                         '${supplierInvoice && (e['invoiceNumber'] ?? '').toString().isNotEmpty ? ' · رقم ${e['invoiceNumber']}' : ''}',
                     style: const TextStyle(color: muted, fontSize: 12),
                   ),

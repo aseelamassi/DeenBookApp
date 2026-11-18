@@ -145,11 +145,11 @@ class Exports {
       'رصيد بداية الفترة: ${pdfMoney(s['openingBalance'])}',
       'رصيد نهاية الفترة: ${pdfMoney(s['closingBalance'])}',
     ],
-    ['التاريخ', 'الحركة', 'الصافي', 'دفع فوري', 'الرصيد بعدها', 'الوصف'],
+    ['التاريخ والوقت', 'الحركة', 'الصافي', 'دفع فوري', 'الرصيد بعدها', 'الوصف'],
     runningStatement(s)
         .map(
           (e) => [
-            day(e['occurredAt']),
+            dateTimeStamp(e['occurredAt']),
             kinds[e['kind']] ?? 'حركة',
             pdfMoney((e['amount'] as num) - (e['discount'] as num? ?? 0)),
             pdfMoney(e['paidNow']),
@@ -189,11 +189,11 @@ class Exports {
         if (selectionLabel?.isNotEmpty == true) selectionLabel!,
         if (pendingLocal > 0) ReportExportGuard.pendingNotice(pendingLocal),
       ],
-      ['التاريخ', 'الحساب', 'الحركة', 'المبلغ', 'الوصف'],
+      ['التاريخ والوقت', 'الحساب', 'الحركة', 'المبلغ', 'الوصف'],
       rows
           .map(
             (e) => [
-              day(e['occurredAt']),
+              dateTimeStamp(e['occurredAt']),
               names[e['partyId']] ?? '',
               kinds[e['kind']] ?? 'حركة',
               pdfMoney((e['amount'] as num) - (e['discount'] as num? ?? 0)),
@@ -234,7 +234,7 @@ class Exports {
         ['ــــــــــــ تفاصيل المشتريات ــــــــــــ', ''],
         for (final row in (data['purchases']['items'] as List))
           [
-            '${row['partyName']} · ${day(row['entry']['occurredAt'])}',
+            '${row['partyName']} · ${dateTimeStamp(row['entry']['occurredAt'])}',
             [
               'قيمة بعد الخصم: ${pdfMoney((row['entry']['amount'] as num) - (row['entry']['discount'] as num? ?? 0))}',
               'مدفوع: ${pdfMoney(row['entry']['paidNow'])}',
@@ -267,14 +267,14 @@ class Exports {
     int pendingLocal = 0,
   }) =>
       '\uFEFF${[
-        ['التاريخ', 'الحساب', 'الحركة', 'المبلغ بعد الخصم', 'حالة الحوالة', 'الوصف'].map(csvCell).join(','),
+        ['التاريخ والوقت', 'الحساب', 'الحركة', 'المبلغ بعد الخصم', 'حالة الحوالة', 'الوصف'].map(csvCell).join(','),
         if (pendingLocal > 0)
           [
             'تنبيه - ليس حركة',
             ReportExportGuard.pendingNotice(pendingLocal),
             '', '', '', '',
           ].map(csvCell).join(','),
-        ...rows.map((e) => [csvCell(day(e['occurredAt'])), csvCell(names[e['partyId']] ?? ''), csvCell(kinds[e['kind']] ?? 'حركة'), decimalMoney(amountCents(e['amount']) - amountCents(e['discount'])), csvCell(e['pendingConfirmation'] == true ? 'بانتظار التأكيد — غير محتسبة' : 'مسجّلة'), csvCell(entryDescription(e))].join(',')),
+        ...rows.map((e) => [csvCell(dateTimeStamp(e['occurredAt'])), csvCell(names[e['partyId']] ?? ''), csvCell(kinds[e['kind']] ?? 'حركة'), decimalMoney(amountCents(e['amount']) - amountCents(e['discount'])), csvCell(e['pendingConfirmation'] == true ? 'بانتظار التأكيد — غير محتسبة' : 'مسجّلة'), csvCell(entryDescription(e))].join(',')),
       ].join('\r\n')}';
   static Future<void> historyCsv(
     BuildContext context,

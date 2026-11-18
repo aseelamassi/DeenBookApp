@@ -40,6 +40,17 @@ String day(dynamic s) {
   return d == null ? '—' : DateFormat('dd/MM/yyyy').format(d.toLocal());
 }
 
+String dateTimeStamp(dynamic value) {
+  final raw = value is DateTime ? value.toIso8601String() : '$value';
+  final date = value is DateTime ? value : DateTime.tryParse(raw);
+  if (date == null) return '—';
+  // A legacy date-only value does not contain a recorded time.
+  if (!RegExp(r'[Tt\s]\d{2}:\d{2}').hasMatch(raw)) {
+    return day(value);
+  }
+  return DateFormat('dd/MM/yyyy — HH:mm').format(date.toLocal());
+}
+
 Map<String, dynamic> period(DateTime start, DateTime end) => {
   'from': DateTime(
     start.year,

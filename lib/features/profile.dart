@@ -9,6 +9,7 @@ import '../services/export.dart';
 import '../services/subscription_contact.dart';
 import '../ui/theme.dart';
 import '../ui/design.dart';
+import '../ui/password_strength.dart';
 import 'sync_center.dart';
 import '../ui/widgets.dart';
 
@@ -272,19 +273,26 @@ class _AccountHelpState extends State<AccountHelp> {
                         if (!widget.reset)
                           Padding(
                             padding: const EdgeInsets.only(bottom: 16),
-                            child: TextFormField(
-                              controller: password,
-                              obscureText: passwordHidden,
-                              decoration: InputDecoration(
-                                labelText: 'كلمة المرور',
-                                suffixIcon: IconButton(
-                                  onPressed: () => setState(() => passwordHidden = !passwordHidden),
-                                  icon: Icon(passwordHidden ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                TextFormField(
+                                  key: const Key('registration-password'),
+                                  controller: password,
+                                  obscureText: passwordHidden,
+                                  decoration: InputDecoration(
+                                    labelText: 'كلمة المرور',
+                                    suffixIcon: IconButton(
+                                      onPressed: () => setState(() => passwordHidden = !passwordHidden),
+                                      icon: Icon(passwordHidden ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                                    ),
+                                  ),
+                                  validator: (v) => (v?.length ?? 0) < 12
+                                      ? 'استخدمي كلمة مرور من 12 حرفاً على الأقل'
+                                      : null,
                                 ),
-                              ),
-                              validator: (v) => (v?.length ?? 0) < 12
-                                  ? 'استخدمي كلمة مرور من 12 حرفاً على الأقل'
-                                  : null,
+                                PasswordStrengthIndicator(controller: password),
+                              ],
                             ),
                           ),
                       ],

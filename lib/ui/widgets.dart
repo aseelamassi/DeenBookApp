@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../core/api.dart';
 import '../core/format.dart';
 import '../core/ledger.dart';
+import '../core/session.dart';
 import 'theme.dart';
 import 'design.dart';
 
@@ -353,6 +355,37 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
                 style: const TextStyle(fontSize: 12, color: muted),
               ),
             ),
+        if (supplierInvoice && (e['hasInvoicePhoto'] == true ||
+            (e['invoicePhotoBase64'] is String &&
+                (e['invoicePhotoBase64'] as String).isNotEmpty)))
+          Builder(builder: (context) => Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton.icon(
+              onPressed: () async {
+                try {
+                  final encoded = e['invoicePhotoBase64'];
+                  final image = encoded is String && encoded.isNotEmpty
+                      ? base64Decode(encoded)
+                      : await Scope.of(context).api.getInvoicePhoto('${e['id']}');
+                  if (!context.mounted) return;
+                  await showDialog<void>(
+                    context: context,
+                    builder: (dialog) => Dialog(
+                      child: InteractiveViewer(
+                        minScale: 0.6,
+                        maxScale: 5,
+                        child: Image.memory(image, fit: BoxFit.contain),
+                      ),
+                    ),
+                  );
+                } catch (error) {
+                  if (context.mounted) message(context, error);
+                }
+              },
+              icon: const Icon(Icons.receipt_long_outlined),
+              label: const Text('عرض صورة الفاتورة الورقية'),
+            ),
+          )),
         if (amountCents(e['discount']) > 0)
           Text(
             'الخصم: ${money(e['discount'])}',

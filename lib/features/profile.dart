@@ -1026,6 +1026,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   );
 }
 
+/// Translate the known invalid-current-password response in this screen only.
+/// Other server errors remain unchanged for troubleshooting.
+String passwordChangeErrorText(Object error) {
+  final raw = error.toString().trim();
+  final normalized = raw.toLowerCase().replaceAll(RegExp(r'[\s.!؟]+$'), '');
+  if (normalized == 'incorrect password' ||
+      normalized == 'current password is incorrect') {
+    return 'كلمة المرور الحالية غير صحيحة. تأكد منها وحاول مرة أخرى.';
+  }
+  return raw;
+}
+
 class PasswordScreen extends StatefulWidget {
   const PasswordScreen({super.key});
   @override
@@ -1087,13 +1099,27 @@ class _PasswordScreenState extends State<PasswordScreen> {
                   style: TextStyle(color: muted),
                 ),
                 const SizedBox(height: 18),
-                if (error != null) Text(error!),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Text(
+                      error!,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        color: Color(0xFFB42318),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 BusyButton(
                   label: 'تغيير كلمة المرور',
                   busy: busy,
                   onPressed: () async {
                     if (!form.currentState!.validate()) return;
-                    setState(() => busy = true);
+                    setState(() {
+                      busy = true;
+                      error = null;
+                    });
                     final s = Scope.of(context);
                     try {
                       await s.api.request(
@@ -1106,7 +1132,9 @@ class _PasswordScreenState extends State<PasswordScreen> {
                       );
                       await s.api.clear();
                     } catch (e) {
-                      if (mounted) setState(() => error = '$e');
+                      if (mounted) {
+                        setState(() => error = passwordChangeErrorText(e));
+                      }
                     } finally {
                       if (mounted) setState(() => busy = false);
                     }

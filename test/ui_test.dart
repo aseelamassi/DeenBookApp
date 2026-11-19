@@ -64,7 +64,7 @@ void main() {
     await t.tap(find.text('تسجيل الدخول إلى دفتر دين'));
     await t.pumpAndSettle();
     expect(
-      find.text('أدخل رقم جوال صحيحاً يبدأ بـ 059 أو 056'),
+      find.text('أدخل رقم الجوال'),
       findsOneWidget,
     );
     expect(t.takeException(), isNull);

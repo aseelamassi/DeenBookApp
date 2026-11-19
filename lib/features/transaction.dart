@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:uuid/uuid.dart';
@@ -123,6 +125,95 @@ class _TransactionScreenState extends State<TransactionScreen> {
       handed = TextEditingController();
   final lines = <InvoiceLine>[];
   final supplierPackCounts = <String, int>{};
+  String? invoicePhotoBase64;
+  String? invoicePhotoContentType;
+  bool photoBusy = false;
+
+  Future<void> capturePaperInvoice(ImageSource source) async {
+    if (photoBusy || busy || pending != null) return;
+    setState(() => photoBusy = true);
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: source,
+        maxWidth: 1600,
+        maxHeight: 2000,
+        imageQuality: 70,
+        requestFullMetadata: false,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      if (bytes.isEmpty || bytes.length > 1024 * 1024) {
+        if (mounted) message(context, 'الصورة كبيرة. اختر صورة أصغر من 1 ميجابايت.');
+        return;
+      }
+      // Determine MIME from bytes, not a platform filename extension.
+      final jpeg = bytes.length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF;
+      final png = bytes.length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47;
+      if (!jpeg && !png) {
+        if (mounted) message(context, 'نوع الصورة غير مدعوم؛ استخدم JPG أو PNG.');
+        return;
+      }
+      if (mounted) setState(() {
+        invoicePhotoBase64 = base64Encode(bytes);
+        invoicePhotoContentType = jpeg ? 'image/jpeg' : 'image/png';
+      });
+    } catch (_) {
+      if (mounted) message(context, 'تعذّر التقاط الصورة. تحقق من صلاحية الكاميرا أو استخدم المعرض.');
+    } finally {
+      if (mounted) setState(() => photoBusy = false);
+    }
+  }
+
+  Widget paperInvoicePhotoCard() => Surface(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('صورة الفاتورة الورقية (اختياري)', style: appText(13, weight: FontWeight.w900)),
+        const SizedBox(height: 6),
+        Text('صوّر فاتورة المندوب للاحتفاظ بها مع الحركة. يمكنك تسجيل المبلغ فقط أو تفصيل الأصناف دون الحاجة إلى صورة.',
+          style: appText(11, color: secondaryText)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: OutlinedButton.icon(
+            onPressed: busy || restoring || photoBusy || pending != null ? null : () => capturePaperInvoice(ImageSource.camera),
+            icon: const Icon(Icons.camera_alt_outlined),
+            label: const Text('تصوير الفاتورة'),
+          )),
+          const SizedBox(width: 8),
+          Expanded(child: OutlinedButton.icon(
+            onPressed: busy || restoring || photoBusy || pending != null ? null : () => capturePaperInvoice(ImageSource.gallery),
+            icon: const Icon(Icons.photo_library_outlined),
+            label: const Text('اختيار صورة'),
+          )),
+        ]),
+        if (photoBusy) const LinearProgressIndicator(),
+        if (invoicePhotoBase64 != null) ...[
+          const SizedBox(height: 10),
+          Text('تم إرفاق صورة الفاتورة ✓', style: appText(11, color: green, weight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          InkWell(
+            onTap: () => showDialog<void>(context: context, builder: (c) => Dialog(
+              child: InteractiveViewer(child: Image.memory(base64Decode(invoicePhotoBase64!), fit: BoxFit.contain)),
+            )),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.memory(base64Decode(invoicePhotoBase64!), height: 115, fit: BoxFit.contain),
+            ),
+          ),
+          if (pending == null)
+            Align(alignment: AlignmentDirectional.centerEnd,
+              child: TextButton.icon(
+                onPressed: busy ? null : () => setState(() {
+                  invoicePhotoBase64 = null;
+                  invoicePhotoContentType = null;
+                }),
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('إزالة الصورة'),
+              )),
+        ],
+      ],
+    ),
+  );
   bool _updatingSupplierNote = false;
   bool _supplierNoteEdited = false;
 
@@ -234,6 +325,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
         note.text = data['note'] ?? '';
         reference.text = data['reference'] ?? '';
         invoice.text = data['invoiceNumber'] ?? '';
+        invoicePhotoBase64 = data['invoicePhotoBase64'] as String?;
+        invoicePhotoContentType = data['invoicePhotoContentType'] as String?;
         discount.text = '${data['discount'] ?? 0}';
         counterparty.text = data['counterpartyName'] ?? '';
         // Restore older drafts that kept the transfer sender in reference.
@@ -416,6 +509,10 @@ class _TransactionScreenState extends State<TransactionScreen> {
             : isCustomerPayment && method != 'Cash'
                 ? counterparty.text.trim()
                 : (hasPayment ? reference.text.trim() : ''),
+        if (supplier && isInvoice && invoicePhotoBase64 != null) ...{
+          'invoicePhotoBase64': invoicePhotoBase64,
+          'invoicePhotoContentType': invoicePhotoContentType,
+        },
         'invoiceNumber': invoice.text.trim().isEmpty
             ? null
             : invoice.text.trim(),
@@ -729,6 +826,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
                           ],
                         ),
                       ),
+                      if (supplier && isInvoice)
+                        paperInvoicePhotoCard(),
                       IgnorePointer(
                         ignoring: pending != null || busy,
                         child: Column(

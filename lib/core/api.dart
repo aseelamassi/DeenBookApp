@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -696,6 +697,50 @@ class Api {
       return snapshotOrThrow(failure);
     } on ApiFailure catch (e) {
       return snapshotOrThrow(e);
+    }
+  }
+
+  /// Download an authenticated paper-invoice image. Never use a public URL:
+  /// invoices contain sensitive supplier information. Cache only after viewing,
+  /// scoped to the signed-in shop so it can be viewed offline again.
+  Future<Uint8List> getInvoicePhoto(String id) async {
+    final shopId = _shopId;
+    if (shopId == null || shopId.isEmpty) {
+      throw ApiFailure('حساب المحل غير متاح.');
+    }
+    final key = 'invoice.photo.$shopId.$id';
+    final saved = await storage.read(key);
+    if (_access == null || _offlineMode) {
+      if (saved != null) return base64Decode(saved);
+      throw ApiFailure('صورة الفاتورة غير متاحة دون إنترنت قبل فتحها مرة واحدة.');
+    }
+    try {
+      Future<Response<List<int>>> fetch() => dio.get<List<int>>(
+        '/api/transactions/$id/invoice-photo',
+        options: Options(
+          responseType: ResponseType.bytes,
+          headers: {'Authorization': 'Bearer $_access'},
+        ),
+      );
+      late Response<List<int>> response;
+      try {
+        response = await fetch();
+      } on DioException catch (e) {
+        if (e.response?.statusCode != 401) rethrow;
+        await refresh();
+        if (_access == null) throw ApiFailure('انتهت جلسة الدخول.');
+        response = await fetch();
+      }
+      final bytes = Uint8List.fromList(response.data ?? <int>[]);
+      if (bytes.isEmpty) throw ApiFailure('صورة الفاتورة غير متاحة.');
+      await storage.write(key, base64Encode(bytes));
+      return bytes;
+    } on DioException catch (e) {
+      if (saved != null &&
+          (e.response?.statusCode == null || e.response!.statusCode! >= 500)) {
+        return base64Decode(saved);
+      }
+      throw ApiFailure.from(e);
     }
   }
 

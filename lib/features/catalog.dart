@@ -667,9 +667,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
                         children: [
                           const Icon(Icons.swap_vert, size: 14),
                           Text(
-                            sort == 'balance'
-                                ? (supplier ? 'الأعلى مستحقات' : 'الأعلى ديناً')
-                                : sortLabel,
+                            sortLabel,
                             style: appText(10, weight: FontWeight.w800),
                           ),
                         ],

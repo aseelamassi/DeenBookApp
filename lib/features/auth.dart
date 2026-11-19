@@ -7,6 +7,32 @@ import '../ui/design.dart';
 import '../ui/widgets.dart';
 import 'profile.dart';
 
+/// Validation copy only; normalization and the server request remain unchanged.
+String? loginPhoneError(String? input) {
+  final value = digits(input ?? '')
+      .trim()
+      .replaceAll(RegExp(r'[\s()\-]'), '');
+  if (value.isEmpty) return 'أدخل رقم الجوال';
+  if (phoneNumber(value) != null) return null;
+
+  if (value.startsWith('+970') || value.startsWith('+972') ||
+      value.startsWith('00970') || value.startsWith('00972')) {
+    final prefixLength = value.startsWith('00') ? 5 : 4;
+    if (value.length - prefixLength < 9) {
+      return 'رقم الجوال غير مكتمل: أدخل 9 أرقام بعد رمز الدولة';
+    }
+  } else if (value.startsWith('059') || value.startsWith('056')) {
+    if (value.length < 10) {
+      return 'رقم الجوال غير مكتمل: أدخل 10 أرقام';
+    }
+  } else if (value.startsWith('59') || value.startsWith('56')) {
+    if (value.length < 9) {
+      return 'رقم الجوال غير مكتمل: أدخل 9 أرقام';
+    }
+  }
+  return 'رقم غير صحيح. مثال: 0591234567 أو +970591234567';
+}
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
   @override
@@ -65,19 +91,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   style: appText(12, color: secondaryText),
                 ),
                 const SizedBox(height: 24),
-                Container(
-                  padding: const EdgeInsets.all(5),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE8EDF2),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: DesignButton(
-                    'الدخول برقم الجوال وكلمة المرور',
-                    background: Colors.white,
-                    onTap: () => FocusScope.of(context).unfocus(),
-                  ),
-                ),
-                const SizedBox(height: 24),
                 AutofillGroup(
                   child: Form(
                     key: form,
@@ -102,11 +115,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           textDirection: TextDirection.ltr,
                           autofillHints: const [AutofillHints.username],
                           decoration: const InputDecoration(
-                            hintText: '059xxxxxxx',
+                            hintText: '059xxxxxxx أو +97059xxxxxxx',
                           ),
-                          validator: (v) => phoneNumber(v ?? '') == null
-                              ? 'أدخل رقم جوال صحيحاً يبدأ بـ 059 أو 056'
-                              : null,
+                          validator: loginPhoneError,
                         ),
                         const SizedBox(height: 20),
                         Text(
@@ -165,13 +176,28 @@ class _LoginScreenState extends State<LoginScreen> {
                         const SizedBox(height: 20),
                         TextButton(
                           onPressed: () => open(context, const AccountHelp()),
-                          child: Text(
-                            'محلك جديد معنا؟ إنشاء حساب للمحل',
-                            style: appText(
-                              12,
-                              color: navy,
-                              weight: FontWeight.w800,
+                          child: Text.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: 'محلك جديد معنا؟ ',
+                                  style: appText(
+                                    13,
+                                    color: navy,
+                                    weight: FontWeight.w700,
+                                  ),
+                                ),
+                                TextSpan(
+                                  text: 'إنشاء حساب للمحل',
+                                  style: appText(
+                                    14,
+                                    color: orange,
+                                    weight: FontWeight.w900,
+                                  ).copyWith(decoration: TextDecoration.underline),
+                                ),
+                              ],
                             ),
+                            textAlign: TextAlign.center,
                           ),
                         ),
                       ],

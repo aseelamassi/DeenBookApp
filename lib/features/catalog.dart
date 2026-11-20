@@ -159,13 +159,11 @@ class _CatalogScreenState extends State<CatalogScreen> {
         ? 'لهم مستحقات'
         : 'عليه دين';
     return Surface(
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: alert ? warningColor : Colors.transparent, width: alert ? 1.5 : 0),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        padding: alert ? const EdgeInsets.all(6) : EdgeInsets.zero,
-        child: Column(
+      // Highlight the outer card edge, without enclosing the card's content
+      // or shrinking its action buttons inside another bordered container.
+      borderColor: alert ? warningColor : null,
+      borderWidth: alert ? 2 : 1,
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           InkWell(
@@ -241,7 +239,9 @@ class _CatalogScreenState extends State<CatalogScreen> {
                           ),
                         ),
                       ),
-                      Text(alert ? ceiling.label : status,
+                      // Keep the monetary status here; the credit-limit
+                      // warning is already visible once in the status chip.
+                      Text(status,
                           style: appText(10, color: alert ? warningColor : muted)),
                     ],
                   ),
@@ -297,7 +297,6 @@ class _CatalogScreenState extends State<CatalogScreen> {
             ),
           ],
         ],
-        ),
       ),
     );
   }
@@ -604,7 +603,20 @@ class _CatalogScreenState extends State<CatalogScreen> {
               children: [
                 Expanded(
                   child: TextField(
+                    key: const Key('catalog-search'),
                     controller: search,
+                    // On a second tap after dismissing the keyboard, some RTL
+                    // keyboards restore the caret before the final character.
+                    // Put it at the logical end so typing continues normally.
+                    // Never modify search.text or move the caret on onChanged.
+                    onTap: () {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (!mounted || search.text.isEmpty) return;
+                        search.selection = TextSelection.collapsed(
+                          offset: search.text.length,
+                        );
+                      });
+                    },
                     style: appText(12),
                     decoration: InputDecoration(
                       hintText: products

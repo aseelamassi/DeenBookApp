@@ -23,9 +23,17 @@ class Width extends StatelessWidget {
 }
 
 class Surface extends StatelessWidget {
-  const Surface({super.key, required this.child, this.color = Colors.white});
+  const Surface({
+    super.key,
+    required this.child,
+    this.color = Colors.white,
+    this.borderColor,
+    this.borderWidth = 1,
+  });
   final Widget child;
   final Color color;
+  final Color? borderColor;
+  final double borderWidth;
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(bottom: 14),
@@ -34,7 +42,10 @@ class Surface extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        side: const BorderSide(color: Color(0xFFE9EAF3)),
+        side: BorderSide(
+          color: borderColor ?? const Color(0xFFE9EAF3),
+          width: borderWidth,
+        ),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),

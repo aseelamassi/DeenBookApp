@@ -42,7 +42,8 @@ class CreditLimitGauge extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (alert)
+          // Compact customer cards already show the warning in their status chip.
+          if (alert && !compact)
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Text(status.label, style: appText(11, weight: FontWeight.w900, color: color)),

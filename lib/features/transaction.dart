@@ -274,7 +274,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
   bool get isInvoice => kind == 'Debt' || kind == 'Purchase';
   bool get isCustomerDebt => kind == 'Debt' && !supplier;
   bool get isCustomerPayment => kind == 'Payment' && !supplier;
-  bool get timestampOnSave => isInvoice || kind == 'Payment';
+  bool get timestampOnSave => isInvoice || kind == 'Payment' || (supplier && kind == 'Return');
   bool get hasPayment =>
       kind == 'Payment' || (isInvoice && (cents(paid.text) ?? 0) > 0);
   String get supplierInvoiceNote {
@@ -647,7 +647,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
             kind == 'Payment'
                 ? (supplier ? 'سداد دفعة لمورد' : 'قبض دفعة / سداد')
                 : kind == 'Return'
-                ? 'مرتجع'
+                ? (supplier ? 'مرتجع بضاعة للمورد' : 'مرتجع')
                 : supplier
                 ? 'تسجيل فاتورة مورد (بضاعة واردة)'
                 : 'تسجيل مشتريات (دين)',
@@ -703,7 +703,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                 : kind == 'Payment'
                 ? (supplier ? 'اعتماد وحفظ سداد المورد ✓' : 'تأكيد وحفظ الدفعة في دفتر دين ✓')
                 : kind == 'Return'
-                ? 'تأكيد وحفظ المرتجع ✓'
+                ? (supplier ? 'حفظ مرتجع المورد ✓' : 'تأكيد وحفظ المرتجع ✓')
                 : supplier
                 ? 'اعتماد وحفظ فاتورة المورد ✓'
                 : 'تأكيد وحفظ المشتريات في دفتر دين ✓',
@@ -1262,7 +1262,11 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                   ],
                                 ),
                               ),
+                            // TC-26: the change calculator belongs only to the
+                            // standalone customer payment flow. A payment entered
+                            // with a purchase needs amount and payment method only.
                             if (modern &&
+                                kind == 'Payment' &&
                                 hasPayment &&
                                 method == 'Cash' &&
                                 !supplier)
@@ -1407,7 +1411,9 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                     note,
                                     supplier && isInvoice
                                         ? 'تفاصيل البضاعة المستلمة أو ملاحظة'
-                                        : 'وصف الحركة (اختياري)',
+                                        : supplier && kind == 'Return'
+                                            ? 'تفاصيل البضاعة المرتجعة (اختياري)'
+                                            : 'وصف الحركة (اختياري)',
                                     lines: supplier && isInvoice ? 2 : 3,
                                     max: 2000,
                                   ),

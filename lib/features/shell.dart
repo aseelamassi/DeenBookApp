@@ -128,7 +128,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                     ),
                   ),
                   Text(
-                    'المستخدم: ${session.isOwner ? 'صاحب المحل' : 'عامل'} · ${session.shopName}',
+                    'المستخدم: ${session.currentUserName} · ${session.isOwner ? 'المالك' : 'عامل'}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: appText(
@@ -244,11 +244,12 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                             style: const TextStyle(fontSize: 12),
                           ),
                         ),
-                        TextButton(
-                          onPressed: () =>
-                              open(context, const SubscriptionScreen()),
-                          child: const Text('الاشتراك'),
-                        ),
+                        if (session.isOwner)
+                          TextButton(
+                            onPressed: () =>
+                                open(context, const SubscriptionScreen()),
+                            child: const Text('الاشتراك'),
+                          ),
                       ],
                     ),
                   ),
@@ -355,6 +356,7 @@ class HomeScreen extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
           children: [
             Remote(
+              key: ValueKey('home-dashboard-${session.revision}'),
               load: () async {
                 final data = await session.api.get('/api/dashboard');
                 final recent = await session.api.get(
@@ -834,7 +836,7 @@ class ShopDrawer extends StatelessWidget {
                           style: appText(12, color: secondaryText),
                         ),
                         Text(
-                          'المستخدم الحالي: المالك',
+                          'المستخدم الحالي: ${s.currentUserName} (${s.isOwner ? 'المالك' : 'عامل'})',
                           style: appText(11, color: navy),
                         ),
                         const SizedBox(height: 4),
@@ -865,13 +867,14 @@ class ShopDrawer extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  tile(
-                    'الاشتراك والتجديد',
-                    '${s.isTrial ? 'تجربة مجانية' : 'اشتراك المحل'} · حتى ${day(s.status?['paidUntil'])}',
-                    Icons.credit_card_outlined,
-                    () => go(const SubscriptionScreen()),
-                    featured: true,
-                  ),
+                  if (s.isOwner)
+                    tile(
+                      'الاشتراك والتجديد',
+                      '${s.isTrial ? 'تجربة مجانية' : 'اشتراك المحل'} · حتى ${day(s.status?['paidUntil'])}',
+                      Icons.credit_card_outlined,
+                      () => go(const SubscriptionScreen()),
+                      featured: true,
+                    ),
                   if (s.isOwner)
                     tile(
                       'العاملون',
@@ -882,14 +885,16 @@ class ShopDrawer extends StatelessWidget {
                     ),
                   const SizedBox(height: 14),
                   tile(
-                    'الملف الشخصي وإعدادات المحل',
-                    'اسم المتجر، الهواتف، إعدادات الحساب',
+                    s.isOwner ? 'الملف الشخصي وإعدادات المحل' : 'ملفي الشخصي',
+                    s.isOwner
+                        ? 'اسم المتجر، الهواتف، إعدادات الحساب'
+                        : 'اسمي ورقم جوالي وتغيير كلمة المرور',
                     Icons.settings_outlined,
-                    () => go(const SettingsScreen()),
+                    () => go(s.isOwner ? const SettingsScreen() : const WorkerProfileScreen()),
                   ),
                   tile(
-                    'الحفظ والنسخ الاحتياطي',
-                    'فحص وحماية بيانات دفتر دين',
+                    'الحفظ واستعادة البيانات',
+                    'استرجاع بيانات المحل المتزامنة من أي جهاز',
                     Icons.cloud_outlined,
                     () => go(const BackupScreen()),
                   ),
@@ -905,21 +910,7 @@ class ShopDrawer extends StatelessWidget {
                     Icons.support_agent_outlined,
                     () => go(const TechnicalSupportScreen()),
                   ),
-                  tile(
-                    'تصدير نسخة احتياطية محلية',
-                    'تنزيل نسخة محلية (.json)',
-                    Icons.download_outlined,
-                    () async {
-                      try {
-                        final data = await s.api.get('/api/backup/export');
-                        if (context.mounted) {
-                          await Exports.backup(data, context);
-                        }
-                      } catch (e) {
-                        if (context.mounted) message(context, e);
-                      }
-                    },
-                  ),
+
                 ],
               ),
             ),

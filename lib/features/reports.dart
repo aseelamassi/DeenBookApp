@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/api.dart';
+import '../core/collection_accounts.dart';
 import '../core/format.dart';
 import '../core/session.dart';
 import '../services/receipts.dart';
@@ -10,6 +11,8 @@ import '../ui/theme.dart';
 import '../ui/design.dart';
 import 'catalog.dart';
 import '../core/ledger.dart';
+import '../core/report_kinds.dart';
+import '../core/report_share_summary.dart';
 import '../ui/widgets.dart';
 
 class ReportsScreen extends StatefulWidget {
@@ -103,6 +106,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 await Exports.report(
                   session.shopName, data, range,
                   pendingLocal: session.pendingSync,
+                  collectionAccounts: collectionAccountsFromSettings(session.settings),
                 );
               } catch (e) {
                 if (mounted) message(context, e);
@@ -121,6 +125,23 @@ class _ReportsScreenState extends State<ReportsScreen> {
               'اختَر الفترة التي تريد مراجعتها. الذمم بالأسفل هي الأرصدة الحالية، وليست فقط حركات الفترة.',
               style: TextStyle(color: muted),
             ),
+            if (collectionAccountsFromSettings(session.settings).isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Surface(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('معلومات التحويل إلى المحل',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 5),
+                  for (final item in collectionAccountsFromSettings(session.settings))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 5),
+                      child: Text('${item.destination} · ${item.accountHolder} · ${item.accountNumber}',
+                        style: const TextStyle(fontSize: 12)),
+                    ),
+                ],
+              )),
+            ],
             const SizedBox(height: 12),
             Wrap(
               spacing: 6,
@@ -372,7 +393,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (range != null) ...period(range!.start, range!.end),
     if (kind != null) 'kind': kind,
     if (partyKind != null) 'partyKind': partyKind,
-    if (pendingOnly) 'pending': true,
+    // Report rows show only confirmed movements unless the merchant asks
+    // specifically for transfers waiting for confirmation.
+    'pending': pendingOnly,
   };
   @override
   void initState() {
@@ -395,7 +418,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       final data = selectedParty == null
           ? await api.get(
               '/api/transactions',
-              query: {...query, 'page': page + 1, 'size': 30},
+              query: {...query, 'includeVoided': true, 'page': page + 1, 'size': 30},
             )
           : await accountHistory(selectedParty!, query);
       final entries = (data['items'] as List)
@@ -441,7 +464,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         .where(
           (e) =>
               (params['kind'] == null || e['kind'] == params['kind']) &&
-              (params['pending'] != true || e['pendingConfirmation'] == true),
+              (params['pending'] == null ||
+                  (e['pendingConfirmation'] == true) == params['pending']),
         )
         .toList()
         .reversed
@@ -467,11 +491,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
       if (partyKind == 'Customer') 'حركات الزبائن',
       if (partyKind == 'Supplier') 'حركات الموردين',
       if (pendingOnly) 'الحوالات بانتظار التأكيد فقط',
+      reportKindLabel(partyKind, kind),
     ].join(' · ');
     setState(() => printing = true);
     try {
       final entries = <Json>[];
       var p = 1;
+      var fetched = 0;
       while (true) {
         final response = exportParty == null
             ? await session.api.get(
@@ -482,10 +508,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
         if (session.isOffline) {
           throw StateError('انقطع الاتصال بالخادم أثناء تجهيز التقرير. أعد المحاولة عند عودة الاتصال.');
         }
+        fetched += (response['items'] as List).length;
         entries.addAll(
-          (response['items'] as List).map((e) => Map<String, dynamic>.from(e)),
+          (response['items'] as List).map((e) => Map<String, dynamic>.from(e))
+              .where((e) => e['voidedAt'] == null),
         );
-        if (entries.length >= (response['total'] as int) ||
+        if (fetched >= (response['total'] as int) ||
             (response['items'] as List).isEmpty) {
           break;
         }
@@ -511,6 +539,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
       if (csv) {
         await Exports.historyCsv(
           context, entries, printNames, pendingLocal: pendingLocal,
+          customerReport: partyKind == 'Customer',
+          collectionAccounts: collectionAccountsFromSettings(session.settings),
         );
       } else {
         await Exports.history(
@@ -521,6 +551,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
           selectedKind,
           selectionLabel: selectedLabel,
           pendingLocal: pendingLocal,
+          customerReport: partyKind == 'Customer',
+          collectionAccounts: collectionAccountsFromSettings(session.settings),
         );
       }
     } catch (e) {
@@ -534,22 +566,48 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final session = Scope.of(context);
     if (!await ReportExportGuard.confirmServerOnly(context, session)) return;
     if (!mounted || printing || busy || error != null || overview == null) return;
-    final pendingLocal = session.pendingSync;
-    final currentOverview = overview!;
-    final text = '${session.shopName}\n'
-        'سجل المشتريات والمدفوعات\n'
-        '${Exports.rangeLabel(range)}\n'
-        '${selectedParty?['name'] ?? (partyKind == 'Supplier' ? 'الموردون' : partyKind == 'Customer' ? 'الزبائن' : 'كل الحسابات')}\n'
-        '${kind == null ? 'كل الحركات' : (kinds[kind] ?? 'حركة')}\n'
-        'الفواتير: ${money(currentOverview['invoices'])}\n'
-        'المقبوضات المؤكدة: ${money(currentOverview['received'])}\n'
-        'المدفوع للموردين: ${money(currentOverview['paid'])}\n'
-        'حوالات معلّقة غير محتسبة: ${currentOverview['pendingCount'] ?? 0}'
-        '${pendingLocal > 0 ? '\n${ReportExportGuard.pendingNotice(pendingLocal)}' : ''}';
+    setState(() => printing = true);
     try {
-      await Receipts.draft(context, text, '');
+      // The filtered movement totals describe the selected period, but the
+      // party balance is always fetched fresh and describes today's balance.
+      num? currentBalance;
+      num? groupOutstanding;
+      if (selectedParty != null) {
+        final card = await session.api.get('/api/parties/${selectedParty!['id']}');
+        currentBalance = card['balance'] as num?;
+        if (currentBalance == null) {
+          throw StateError('تعذر قراءة الرصيد الحالي للحساب. أعد المحاولة.');
+        }
+      } else {
+        final endpoint = partyKind == 'Supplier'
+            ? '/api/suppliers/overview'
+            : '/api/customers/overview';
+        final accounts = await session.api.get(endpoint);
+        groupOutstanding = accounts['outstanding'] as num?;
+      }
+      if (!mounted) return;
+      if (session.isOffline) {
+        message(context, 'انقطع الاتصال. أعد المحاولة قبل مشاركة الملخص.');
+        return;
+      }
+      final draft = buildReportShareSummary(
+        shopName: session.shopName,
+        partyKind: partyKind ?? 'Customer',
+        periodLabel: Exports.rangeLabel(range),
+        overview: overview!,
+        partyName: selectedParty?['name']?.toString(),
+        kind: kind,
+        currentBalance: currentBalance,
+        groupOutstanding: groupOutstanding,
+        pendingOnly: pendingOnly,
+        pendingLocal: session.pendingSync,
+        collectionAccounts: collectionAccountsFromSettings(session.settings),
+      );
+      await Receipts.draft(context, draft, '');
     } catch (e) {
       if (mounted) message(context, e);
+    } finally {
+      if (mounted) setState(() => printing = false);
     }
   }
 
@@ -619,7 +677,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           icon: const BackButtonIcon(),
         ),
         title: Text(
-          'سجل المشتريات والمدفوعات',
+          'تقرير حركات الزبائن والموردين',
           style: appText(14, weight: FontWeight.w900),
         ),
         actions: [
@@ -648,14 +706,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 items: const {
                   'Customer': 'الزبائن',
                   'Supplier': 'الموردون',
-                  'payments': 'المدفوعات',
                 },
-                selected: partyKind ?? (kind == 'Payment' ? 'payments' : 'all'),
+                selected: partyKind ?? 'Customer',
                 onSelected: (v) {
                   if (printing) return;
                   setState(() {
-                    partyKind = v == 'payments' ? null : v;
-                    kind = v == 'payments' ? 'Payment' : null;
+                    partyKind = v;
+                    kind = null;
                     selectedParty = null;
                     pendingOnly = false;
                   });
@@ -780,10 +837,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                 ),
                               ),
                               items: [
-                                for (final e in {
-                                  'all': 'كل الحركات',
-                                  ...kinds,
-                                }.entries)
+                                for (final e in reportKindsFor(partyKind).entries)
                                   DropdownMenuItem(
                                     value: e.key,
                                     child: Text(
@@ -795,9 +849,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                               onChanged: printing
                                   ? null
                                   : (v) {
-                                      setState(
-                                        () => kind = v == 'all' ? null : v,
-                                      );
+                                      setState(() {
+                                        kind = v == 'all' ? null : v;
+                                        pendingOnly = false;
+                                      });
                                       load();
                                     },
                             ),
@@ -806,7 +861,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ),
                     ],
                   ),
-                  if (session.ledgerV2)
+                  if (session.ledgerV2 && partyKind == 'Customer' &&
+                      (kind == null || kind == 'Payment'))
                     CheckboxListTile(
                       dense: true,
                       contentPadding: EdgeInsets.zero,
@@ -830,9 +886,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
               Row(
                 children: [
                   for (final stat in [
-                    ('الفواتير', 'invoices', navy),
-                    ('المقبوضات المؤكدة', 'received', green),
-                    ('مدفوع للموردين', 'paid', orange),
+                    (partyKind == 'Supplier' ? 'الفواتير' : 'المشتريات', 'invoices', navy),
+                    (partyKind == 'Supplier' ? 'مدفوع للموردين' : 'المدفوعات المؤكدة',
+                        partyKind == 'Supplier' ? 'paid' : 'received', green),
+                    ('المرتجعات', 'returns', orange),
                   ]) ...[
                     if (stat.$2 != 'invoices') const SizedBox(width: 8),
                     Expanded(
@@ -869,7 +926,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
               ),
               const SizedBox(height: 10),
               Text(
-                'حوالات بانتظار التأكيد: ${overview!['pendingCount'] ?? 0} · لا تُحتسب ضمن المقبوضات',
+                pendingOnly
+                    ? 'الحوالات المعلقة: ${overview!['pendingCount'] ?? 0} · لم تُحتسب ضمن المدفوعات المؤكدة'
+                    : 'المدفوعات المعروضة مؤكدة، ولا تشمل الحوالات المعلقة',
                 style: appText(10, color: secondaryText),
               ),
               const SizedBox(height: 14),
@@ -915,7 +974,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     open(context, const ReportsScreen());
                   } else {
                     setState(() {
-                      partyKind = null;
+                      // The report is always scoped to the selected account type.
                       kind = null;
                       selectedParty = null;
                       pendingOnly = false;
@@ -924,7 +983,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   }
                 },
                 itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'all', child: Text('كل حسابات المحل')),
+                  PopupMenuItem(value: 'all', child: Text('إلغاء الفلاتر')),
                   PopupMenuItem(
                     value: 'report',
                     child: Text('تقرير النقد والذمم'),

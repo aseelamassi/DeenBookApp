@@ -114,7 +114,7 @@ List<Json> runningStatement(Json statement) {
   var balance = amountCents(statement['openingBalance']);
   return (statement['entries'] as List).map((raw) {
     final entry = Map<String, dynamic>.from(raw);
-    balance += amountCents(entry['delta']);
+    if (entry['voidedAt'] == null) balance += amountCents(entry['delta']);
     return {...entry, 'balanceAfter': balance / 100};
   }).toList();
 }
@@ -142,8 +142,9 @@ String entryDescription(Json e) => [
 
 // Summary of filtered statement entries; integer cents and confirmed payments only.
 Json historyTotals(List<Json> entries, {required bool supplier}) {
-  var invoices = 0, paid = 0, pending = 0;
+  var invoices = 0, paid = 0, returns = 0, pending = 0;
   for (final e in entries) {
+    if (e['voidedAt'] != null) continue;
     if (e['pendingConfirmation'] == true) {
       pending++;
       continue;
@@ -153,12 +154,15 @@ Json historyTotals(List<Json> entries, {required bool supplier}) {
       paid += amountCents(e['paidNow']);
     } else if (e['kind'] == 'Payment') {
       paid += amountCents(e['amount']);
+    } else if (e['kind'] == 'Return') {
+      returns += amountCents(e['amount']);
     }
   }
   return {
     'invoices': invoices / 100,
     'received': supplier ? 0 : paid / 100,
     'paid': supplier ? paid / 100 : 0,
+    'returns': returns / 100,
     'pendingCount': pending,
   };
 }

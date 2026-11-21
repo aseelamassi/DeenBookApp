@@ -7,6 +7,7 @@ import '../core/format.dart';
 import '../core/ledger.dart';
 import '../core/session.dart';
 import '../core/weight_pricing.dart';
+import '../core/weight_entry_validation.dart';
 import '../ui/widgets.dart';
 import '../ui/design.dart';
 import 'catalog.dart';
@@ -272,15 +273,13 @@ class _WeightCalculatorDialogState extends State<WeightCalculatorDialog> {
   bool byAmount = false;
   bool inKilos = false;
 
-  int? get grams {
-    if (!byAmount) {
-      return inKilos
-          ? quantityMillis(weight.text)
-          : int.tryParse(digits(weight.text.trim()));
-    }
-    final requested = cents(amount.text);
-    return requested == null ? null : gramsForAmount(widget.line.price, requested);
-  }
+  WeightEntryResult get result => validateWeightEntry(
+        pricePerKgCents: widget.line.price,
+        byAmount: byAmount,
+        inKilos: inKilos,
+        weightText: weight.text,
+        amountText: amount.text,
+      );
 
   @override
   void dispose() {
@@ -291,9 +290,10 @@ class _WeightCalculatorDialogState extends State<WeightCalculatorDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final q = grams;
-    final total = q == null ? 0 : totalForGrams(widget.line.price, q);
-    final requested = byAmount ? cents(amount.text) : null;
+    final calculation = result;
+    final q = calculation.grams;
+    final total = calculation.totalCents;
+    final requested = calculation.requestedCents;
     return AlertDialog(
       title: Text('⚖️ ${widget.line.name}'),
       content: SingleChildScrollView(
@@ -329,7 +329,10 @@ class _WeightCalculatorDialogState extends State<WeightCalculatorDialog> {
                     child: TextField(
                       controller: weight,
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: InputDecoration(labelText: inKilos ? 'الوزن بالكيلو' : 'الوزن بالغرام'),
+                      decoration: InputDecoration(
+                        labelText: inKilos ? 'الوزن بالكيلو' : 'الوزن بالغرام',
+                        helperText: 'الحد الأقصى 100 كغم للعملية الواحدة',
+                      ),
                       onChanged: (_) => setState(() {}),
                     ),
                   ),
@@ -362,7 +365,10 @@ class _WeightCalculatorDialogState extends State<WeightCalculatorDialog> {
               TextField(
                 controller: amount,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'مبلغ آخر (₪)'),
+                decoration: const InputDecoration(
+                  labelText: 'مبلغ آخر (₪)',
+                  helperText: 'الحد الأقصى 10,000 ₪ للعملية الواحدة',
+                ),
                 onChanged: (_) => setState(() {}),
               ),
             ],
@@ -374,13 +380,21 @@ class _WeightCalculatorDialogState extends State<WeightCalculatorDialog> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
-                q == null || q <= 0
-                    ? 'أدخل وزنًا أو مبلغًا صحيحًا'
+                !calculation.canSubmit
+                    ? '⚖️ الوزن: 0 غرام — السعر: ${money(0)}'
                     : '⚖️ الوزن المطلوب على الميزان: ${weightLabel(q)} — السعر الفعلي: ${money(total / 100)}',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
-            if (requested != null && requested != total)
+            if (calculation.error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  calculation.error!,
+                  style: const TextStyle(color: Colors.red, fontSize: 12),
+                ),
+              ),
+            if (calculation.canSubmit && requested != null && requested != total)
               Text(
                 'المبلغ المطلوب: ${money(requested / 100)}؛ الفرق ناتج عن التقريب لأقرب غرام، وسيُحفظ السعر الفعلي.',
                 style: const TextStyle(fontSize: 11),
@@ -391,9 +405,9 @@ class _WeightCalculatorDialogState extends State<WeightCalculatorDialog> {
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
         FilledButton(
-          onPressed: q == null || q <= 0 || q > 999999000 || total <= 0
-              ? null
-              : () => Navigator.pop(context, WeightSelection(q, byAmount)),
+          onPressed: calculation.canSubmit
+              ? () => Navigator.pop(context, WeightSelection(q, byAmount))
+              : null,
           child: const Text('إضافة للفاتورة'),
         ),
       ],

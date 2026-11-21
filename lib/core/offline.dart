@@ -154,7 +154,7 @@ class OfflineVault {
         matches = matches.where((r) {
           if (query?['kind'] != null && r['kind'] != query!['kind']) return false;
           if (query?['partyId'] != null && r['partyId'] != query!['partyId']) return false;
-          if (query?['pending'] == true && r['pendingConfirmation'] != true) return false;
+          if (query?['pending'] != null && (r['pendingConfirmation'] == true) != query!['pending']) return false;
           final from = DateTime.tryParse('${query?['from'] ?? ''}');
           final to = DateTime.tryParse('${query?['to'] ?? ''}');
           final occured = DateTime.tryParse('${r['occurredAt'] ?? ''}')?.toLocal();

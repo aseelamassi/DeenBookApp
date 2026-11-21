@@ -103,7 +103,9 @@ class DeenBookApp extends StatelessWidget {
                 ),
               )
             : !session.active
-            ? const SubscriptionScreen(gate: true)
+            ? (session.isOwner
+                ? const SubscriptionScreen(gate: true)
+                : const WorkerSubscriptionLockedScreen())
             : session.workerSetup ? const WorkersScreen() : const AppShell(),
       ),
     ),

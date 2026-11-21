@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../core/api.dart';
@@ -270,12 +271,119 @@ Widget partyTile(Json p, VoidCallback onTap) => Card(
     trailing: compactAmount(((p['balance'] as num?) ?? 0).abs()),
   ),
 );
+/// Supplier invoice photos must appear in both supplier statements and the
+/// all-movements history. Do not show an action for invoices without a photo.
+bool supplierInvoiceHasPhoto(Json entry) =>
+    entry['kind'] == 'Purchase' &&
+    (entry['hasInvoicePhoto'] == true ||
+        (entry['invoicePhotoBase64'] is String &&
+            (entry['invoicePhotoBase64'] as String).isNotEmpty));
+
+/// Full-screen private viewer, with pinch-to-zoom and panning for receipt text.
+/// The image is downloaded only after opening its attachment, not once per row.
+class SupplierInvoicePhotoScreen extends StatelessWidget {
+  const SupplierInvoicePhotoScreen({super.key, required this.bytes});
+  final Uint8List bytes;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    key: const Key('supplier-invoice-photo-fullscreen'),
+    backgroundColor: Colors.black,
+    appBar: AppBar(
+      title: const Text('صورة الفاتورة الورقية'),
+      backgroundColor: Colors.black,
+      foregroundColor: Colors.white,
+    ),
+    body: LayoutBuilder(
+      builder: (context, size) => InteractiveViewer(
+        minScale: 1,
+        maxScale: 6,
+        panEnabled: true,
+        child: SizedBox(
+          width: size.maxWidth,
+          height: size.maxHeight,
+          child: Image.memory(bytes, fit: BoxFit.contain),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Request a written reason before a ledger entry is soft-voided.
+/// A cancelled dialog never makes a network request.
+Future<String?> askVoidReason(BuildContext context) => showDialog<String>(
+  context: context,
+  builder: (dialogContext) => const _VoidReasonDialog(),
+);
+
+class _VoidReasonDialog extends StatefulWidget {
+  const _VoidReasonDialog();
+
+  @override
+  State<_VoidReasonDialog> createState() => _VoidReasonDialogState();
+}
+
+class _VoidReasonDialogState extends State<_VoidReasonDialog> {
+  final controller = TextEditingController();
+  final formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    scrollable: true,
+    title: const Text('شطب الحركة'),
+    content: Form(
+      key: formKey,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('ستبقى الحركة ظاهرة في كشف الحساب وعليها خط شطب، لكن دون تأثير على الرصيد أو التقارير.'),
+          const SizedBox(height: 14),
+          TextFormField(
+            key: const Key('tc40-void-reason'),
+            controller: controller,
+            autofocus: true,
+            maxLength: 500,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(labelText: 'سبب الشطب *', hintText: 'مثال: سُجّلت الحركة بالخطأ'),
+            validator: (value) => value == null || value.trim().isEmpty
+                ? 'اكتب سبب الشطب أولًا'
+                : null,
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
+      FilledButton(
+        key: const Key('tc40-void-only'),
+        onPressed: () {
+          if (formKey.currentState!.validate()) {
+            Navigator.pop(context, controller.text.trim());
+          }
+        },
+        child: const Text('شطب الحركة فقط'),
+      ),
+    ],
+  );
+}
+
 Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onConfirm, VoidCallback? onVoid}) {
   final pending = e['pendingConfirmation'] == true;
   final offlinePending = e['offlinePending'] == true;
+  final voided = e['voidedAt'] != null;
   final value = ((e['amount'] as num?) ?? 0) - ((e['discount'] as num?) ?? 0);
   final negative = ['Payment', 'Return'].contains(e['kind']);
-  final supplierInvoice = supplier && e['kind'] == 'Purchase';
+  // A Purchase is a supplier invoice even in the global movements list.
+  // The attachment must not depend on the screen passing supplier: true.
+  final supplierInvoice = e['kind'] == 'Purchase';
   final supplierPayment = supplier && e['kind'] == 'Payment';
   final items = (e['items'] as List? ?? []);
   return Padding(
@@ -295,7 +403,12 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
                         ? 'فاتورة بضاعة مورد'
                         : supplierPayment ? 'سداد دفعة لمورد'
                         : kinds[e['kind']] ?? 'حركة'),
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: voided ? muted : null,
+                      decoration: voided ? TextDecoration.lineThrough : null,
+                      decorationThickness: 2,
+                    ),
                   ),
                   Text(
                     '${supplierInvoice ? 'فاتورة توريد' : kinds[e['kind']] ?? ''} · ${dateTimeStamp(e['occurredAt'])}'
@@ -308,15 +421,28 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 110),
               child: FittedBox(
-                child: amount(
-                  negative ? -value : value,
-                  size: 14,
-                  color: negative ? green : orange,
-                ),
+                child: voided
+                    ? Text(money(negative ? -value : value),
+                        style: appText(14, color: muted, weight: FontWeight.w800)
+                            .copyWith(decoration: TextDecoration.lineThrough, decorationThickness: 2))
+                    : amount(
+                        negative ? -value : value,
+                        size: 14,
+                        color: negative ? green : orange,
+                      ),
               ),
             ),
           ],
         ),
+        if (voided) ...[
+          const SizedBox(height: 8),
+          Text('مشطوبة — لا تدخل في الرصيد أو التقارير',
+              key: const Key('tc40-voided-label'),
+              style: appText(11, color: const Color(0xFFB42318), weight: FontWeight.w800)),
+          if ((e['voidReason'] ?? '').toString().trim().isNotEmpty)
+            Text('سبب الشطب: ${e['voidReason']}',
+                style: appText(11, color: muted)),
+        ],
         const SizedBox(height: 8),
         if (e['kind'] == 'Payment' || amountCents(e['paidNow']) > 0)
           Text(
@@ -366,35 +492,34 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
                 style: const TextStyle(fontSize: 12, color: muted),
               ),
             ),
-        if (supplierInvoice && (e['hasInvoicePhoto'] == true ||
-            (e['invoicePhotoBase64'] is String &&
-                (e['invoicePhotoBase64'] as String).isNotEmpty)))
-          Builder(builder: (context) => Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: TextButton.icon(
-              onPressed: () async {
-                try {
-                  final encoded = e['invoicePhotoBase64'];
-                  final image = encoded is String && encoded.isNotEmpty
-                      ? base64Decode(encoded)
-                      : await Scope.of(context).api.getInvoicePhoto('${e['id']}');
-                  if (!context.mounted) return;
-                  await showDialog<void>(
-                    context: context,
-                    builder: (dialog) => Dialog(
-                      child: InteractiveViewer(
-                        minScale: 0.6,
-                        maxScale: 5,
-                        child: Image.memory(image, fit: BoxFit.contain),
+        if (supplierInvoiceHasPhoto(e))
+          Builder(builder: (context) => Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: OutlinedButton.icon(
+                key: const Key('supplier-invoice-photo-action'),
+                onPressed: () async {
+                  try {
+                    final encoded = e['invoicePhotoBase64'];
+                    // Pending offline invoices include their image bytes in the
+                    // local outbox. Synced invoices are fetched securely by ID.
+                    final bytes = encoded is String && encoded.isNotEmpty
+                        ? base64Decode(encoded)
+                        : await Scope.of(context).api.getInvoicePhoto('${e['id']}');
+                    if (!context.mounted) return;
+                    await Navigator.of(context).push<void>(
+                      MaterialPageRoute(
+                        builder: (_) => SupplierInvoicePhotoScreen(bytes: bytes),
                       ),
-                    ),
-                  );
-                } catch (error) {
-                  if (context.mounted) message(context, error);
-                }
-              },
-              icon: const Icon(Icons.receipt_long_outlined),
-              label: const Text('عرض صورة الفاتورة الورقية'),
+                    );
+                  } catch (error) {
+                    if (context.mounted) message(context, error);
+                  }
+                },
+                icon: const Icon(Icons.attach_file),
+                label: const Text('عرض صورة الفاتورة الورقية'),
+              ),
             ),
           )),
         if (amountCents(e['discount']) > 0)
@@ -430,7 +555,7 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
               style: const TextStyle(fontSize: 12, color: Color(0xFF8B5800)),
             ),
           ),
-        if (onVoid != null && !offlinePending) ...[
+        if (onVoid != null && !offlinePending && !voided) ...[
           Align(
             alignment: AlignmentDirectional.centerStart,
             child: TextButton.icon(
@@ -440,7 +565,7 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
             ),
           ),
         ],
-        if (pending) ...[
+        if (pending && !voided) ...[
           const SizedBox(height: 8),
           const Text(
             'بانتظار وصول الحوالة — لم تُحتسب دفعة',

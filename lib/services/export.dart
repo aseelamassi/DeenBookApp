@@ -9,6 +9,7 @@ import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../core/api.dart';
+import '../core/collection_accounts.dart';
 import '../core/format.dart';
 import '../core/ledger.dart';
 import 'report_export_guard.dart';
@@ -137,16 +138,19 @@ class Exports {
     String shop,
     Json s, {
     DateTimeRange? range,
+    List<ShopCollectionAccount> collectionAccounts = const [],
   }) => document(
     shop,
     'كشف حساب: ${s['party']['name']}',
     [
       rangeLabel(range),
+      if (s['party']['kind'] == 'Customer') ...collectionAccountLines(collectionAccounts),
       'رصيد بداية الفترة: ${pdfMoney(s['openingBalance'])}',
       'رصيد نهاية الفترة: ${pdfMoney(s['closingBalance'])}',
     ],
     ['التاريخ والوقت', 'الحركة', 'الصافي', 'دفع فوري', 'الرصيد بعدها', 'الوصف'],
     runningStatement(s)
+        .where((e) => e['voidedAt'] == null)
         .map(
           (e) => [
             dateTimeStamp(e['occurredAt']),
@@ -163,8 +167,10 @@ class Exports {
     String shop,
     Json s, {
     DateTimeRange? range,
+    List<ShopCollectionAccount> collectionAccounts = const [],
   }) async {
-    final bytes = await statementBytes(shop, s, range: range);
+    final bytes = await statementBytes(shop, s,
+      range: range, collectionAccounts: collectionAccounts);
     await Printing.layoutPdf(
       name: 'DeenBook-statement.pdf',
       onLayout: (_) => Future.value(bytes),
@@ -179,18 +185,22 @@ class Exports {
     String? kind, {
     String? selectionLabel,
     int pendingLocal = 0,
+    List<ShopCollectionAccount> collectionAccounts = const [],
+    bool customerReport = true,
   }) async {
     final bytes = await document(
       shop,
       'سجل الحركات',
       [
         rangeLabel(range),
+        if (customerReport) ...collectionAccountLines(collectionAccounts),
         kind == null ? 'كل الحركات' : kinds[kind]!,
         if (selectionLabel?.isNotEmpty == true) selectionLabel!,
         if (pendingLocal > 0) ReportExportGuard.pendingNotice(pendingLocal),
       ],
       ['التاريخ والوقت', 'الحساب', 'الحركة', 'المبلغ', 'الوصف'],
       rows
+          .where((e) => e['voidedAt'] == null)
           .map(
             (e) => [
               dateTimeStamp(e['occurredAt']),
@@ -213,6 +223,7 @@ class Exports {
     Json data,
     DateTimeRange range, {
     int pendingLocal = 0,
+    List<ShopCollectionAccount> collectionAccounts = const [],
   }) async {
     final s = data['summary'], c = data['cash'];
     final bytes = await document(
@@ -220,6 +231,7 @@ class Exports {
       'تقرير المحل',
       [
         rangeLabel(range),
+        ...collectionAccountLines(collectionAccounts),
         if (pendingLocal > 0) ReportExportGuard.pendingNotice(pendingLocal),
       ],
       ['البيان', 'القيمة'],
@@ -265,6 +277,8 @@ class Exports {
     List<Json> rows,
     Map<String, String> names, {
     int pendingLocal = 0,
+    List<ShopCollectionAccount> collectionAccounts = const [],
+    bool customerReport = true,
   }) =>
       '\uFEFF${[
         ['التاريخ والوقت', 'الحساب', 'الحركة', 'المبلغ بعد الخصم', 'حالة الحوالة', 'الوصف'].map(csvCell).join(','),
@@ -274,13 +288,21 @@ class Exports {
             ReportExportGuard.pendingNotice(pendingLocal),
             '', '', '', '',
           ].map(csvCell).join(','),
-        ...rows.map((e) => [csvCell(dateTimeStamp(e['occurredAt'])), csvCell(names[e['partyId']] ?? ''), csvCell(kinds[e['kind']] ?? 'حركة'), decimalMoney(amountCents(e['amount']) - amountCents(e['discount'])), csvCell(e['pendingConfirmation'] == true ? 'بانتظار التأكيد — غير محتسبة' : 'مسجّلة'), csvCell(entryDescription(e))].join(',')),
+        ...rows.where((e) => e['voidedAt'] == null).map((e) => [csvCell(dateTimeStamp(e['occurredAt'])), csvCell(names[e['partyId']] ?? ''), csvCell(kinds[e['kind']] ?? 'حركة'), decimalMoney(amountCents(e['amount']) - amountCents(e['discount'])), csvCell(e['pendingConfirmation'] == true ? 'بانتظار التأكيد — غير محتسبة' : 'مسجّلة'), csvCell(entryDescription(e))].join(',')),
+        if (customerReport && collectionAccounts.isNotEmpty) ...[
+          List.filled(6, '').map(csvCell).join(','),
+          ['معلومات التحويل إلى المحل', '', '', '', '', ''].map(csvCell).join(','),
+          for (final a in collectionAccounts)
+            [a.destination, a.accountNumber, 'اسم صاحب الحساب', a.accountHolder, '', ''].map(csvCell).join(','),
+        ],
       ].join('\r\n')}';
   static Future<void> historyCsv(
     BuildContext context,
     List<Json> rows,
     Map<String, String> names, {
     int pendingLocal = 0,
+    List<ShopCollectionAccount> collectionAccounts = const [],
+    bool customerReport = true,
   }) async {
     final box = context.findRenderObject() as RenderBox?;
     await SharePlus.instance.share(
@@ -289,6 +311,8 @@ class Exports {
           XFile.fromData(
             Uint8List.fromList(utf8.encode(historyCsvText(
                 rows, names, pendingLocal: pendingLocal,
+                collectionAccounts: collectionAccounts,
+                customerReport: customerReport,
               ))),
             mimeType: 'text/csv',
           ),

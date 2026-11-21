@@ -495,16 +495,30 @@ class Api {
     }
   }
 
-  Future<void> login(String phone, String password) async {
-    final generation = ++_generation;
-    _shopId = null;
-    _setOffline(false);
+  /// Modify an existing pending signup; never invokes registration again.
+  /// Owner password is checked by the server before changing transfer details.
+  Future<Json> updatePendingRegistration(Json data) async {
     try {
+      final result = await dio.put('/api/registration/pending-activation', data: data);
+      return _responseObject(result.data);
+    } on DioException catch (e) {
+      throw ApiFailure.from(e);
+    }
+  }
+
+  Future<void> login(String phone, String password) async {
+    try {
+      // Only replace an existing owner's session AFTER the worker password
+      // has been accepted. A mistyped password leaves the old session intact.
       final result = await dio.post(
         '/api/auth/login',
         data: {'phoneNumber': phone, 'password': password},
       );
-      await _accept(_responseObject(result.data), generation);
+      final tokens = _responseObject(result.data);
+      final generation = ++_generation;
+      await _accept(tokens, generation);
+      _shopId = null;
+      _setOffline(false);
       // A new identity must not inherit a previous account's offline snapshots.
       await storage.delete('offline.identity');
     } on DioException catch (e) {

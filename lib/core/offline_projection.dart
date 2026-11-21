@@ -64,7 +64,7 @@ class OfflineProjection {
       if (!isInsideDate(e, query)) return false;
       if (query?['kind'] != null && '${query!['kind']}' != '${e['kind']}') return false;
       if (query?['partyId'] != null && '${query!['partyId']}' != '${e['partyId']}') return false;
-      if (query?['pending'] == true && e['pendingConfirmation'] != true) return false;
+      if (query?['pending'] != null && (e['pendingConfirmation'] == true) != query!['pending']) return false;
       final selectedKind = '${query?['partyKind'] ?? ''}';
       if (selectedKind.isNotEmpty) {
         final actual = partyKinds['${e['partyId']}'] ??

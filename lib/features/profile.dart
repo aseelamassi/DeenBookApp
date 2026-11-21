@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 
 import '../core/format.dart';
+import '../core/collection_accounts.dart';
 import '../core/session.dart';
 import '../services/export.dart';
 import '../services/subscription_contact.dart';
@@ -104,6 +105,9 @@ class _AccountHelpState extends State<AccountHelp> {
   int selected = 3, step = 0;
   String paymentDestination = 'bank';
   bool trial = true, passwordHidden = true, busy = false;
+  // Becomes true only after the server confirms initial paid registration.
+  // Editing the transfer must NEVER call POST /api/registration again.
+  bool paidRegistrationCreated = false;
   String? error, receiptBase64, receiptContentType;
   final name = TextEditingController(),
       phone = TextEditingController(),
@@ -130,19 +134,32 @@ class _AccountHelpState extends State<AccountHelp> {
     setState(() { busy = true; error = null; });
     try {
       final s = Scope.of(context);
-      final result = await s.api.registerShop({
-        'shopName': name.text.trim(),
-        'ownerName': owner.text.trim(),
-        'phoneNumber': phoneNumber(phone.text),
-        'password': password.text,
-        'freeTrial': trial,
-        'months': selected,
-        'senderName': trial ? null : sender.text.trim(),
-        'destination': paymentDestination,
-        'receiptImageBase64': receiptBase64,
-        'receiptContentType': receiptContentType,
-      });
+      final result = paidRegistrationCreated
+          ? await s.api.updatePendingRegistration({
+              'phoneNumber': phoneNumber(phone.text),
+              'password': password.text,
+              'months': selected,
+              'senderName': sender.text.trim(),
+              'destination': paymentDestination,
+              'receiptImageBase64': receiptBase64,
+              'receiptContentType': receiptContentType,
+            })
+          : await s.api.registerShop({
+              'shopName': name.text.trim(),
+              'ownerName': owner.text.trim(),
+              'phoneNumber': phoneNumber(phone.text),
+              'password': password.text,
+              'freeTrial': trial,
+              'months': selected,
+              'senderName': trial ? null : sender.text.trim(),
+              'destination': paymentDestination,
+              'receiptImageBase64': receiptBase64,
+              'receiptContentType': receiptContentType,
+            });
       if (!mounted) return;
+      if (!trial && result['state'] == 'Pending') {
+        paidRegistrationCreated = true;
+      }
       if (trial) {
         await Navigator.of(context).push(MaterialPageRoute<void>(
           builder: (_) => _TrialActivatedScreen(
@@ -300,7 +317,10 @@ class _AccountHelpState extends State<AccountHelp> {
                   ),
                 if (!widget.reset && step == 1) ...[
                   InkWell(
-                    onTap: () => setState(() => trial = true),
+                    onTap: paidRegistrationCreated
+                        ? () => message(context,
+                            'تم إنشاء طلب اشتراك مدفوع لهذا المحل؛ يمكنك تعديل بيانات التحويل أو مدة الاشتراك فقط.')
+                        : () => setState(() => trial = true),
                     borderRadius: BorderRadius.circular(18),
                     child: Container(
                       padding: const EdgeInsets.all(18),
@@ -387,6 +407,13 @@ class _AccountHelpState extends State<AccountHelp> {
                     Text('بعد تسجيل الطلب على الخادم يبقى قيد المراجعة حتى يؤكد الأدمن وصول الحوالة.', style: appText(11, color: secondaryText)),
                   ],
                 ],
+                if (!widget.reset && step == 2 && paidRegistrationCreated) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'أنت الآن تعدّل طلب التفعيل الحالي، ولن يتم تسجيل محل أو رقم جوال جديد.',
+                    style: appText(12, color: secondaryText),
+                  ),
+                ],
                 const SizedBox(height: 24),
                 if (error != null)
                   Padding(
@@ -396,7 +423,13 @@ class _AccountHelpState extends State<AccountHelp> {
                 BusyButton(
                   busy: busy,
                   label: widget.reset || step == 2
-                      ? (widget.reset ? 'طلب استعادة الحساب' : trial ? 'طلب بدء تجربة مجانية' : 'أرسلت التحويل — إرسال طلب التفعيل')
+                      ? (widget.reset
+                          ? 'طلب استعادة الحساب'
+                          : trial
+                              ? 'طلب بدء تجربة مجانية'
+                              : paidRegistrationCreated
+                                  ? 'حفظ تعديلات طلب التفعيل'
+                                  : 'أرسلت التحويل — إرسال طلب التفعيل')
                       : 'متابعة ←',
                   onPressed: () async {
                     if ((widget.reset || step == 0) &&
@@ -687,7 +720,9 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   int selected = 3;
   String paymentDestination = 'bank';
   bool busy = false;
-  String? activationStatus, receiptBase64, receiptContentType;
+  bool checkingActivation = true;
+  String? activationStatus, activationError, receiptBase64, receiptContentType;
+  Map<String, dynamic>? activationRequest;
   final sender = TextEditingController();
   @override
   void initState() {
@@ -697,11 +732,132 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   @override
   void dispose() { sender.dispose(); super.dispose(); }
   Future<void> loadActivation() async {
+    if (!mounted) return;
+    setState(() {
+      checkingActivation = true;
+      activationError = null;
+    });
     try {
       final result = await Scope.of(context).api.get('/api/subscription/activation');
-      if (mounted) setState(() => activationStatus = (result['request'] as Map?)?['status'] as String?);
-    } catch (_) { /* Works with older deployed APIs, which have no request status. */ }
+      if (!mounted) return;
+      final raw = result['request'];
+      final request = raw is Map<String, dynamic>
+          ? raw
+          : raw is Map
+              ? Map<String, dynamic>.from(raw)
+              : null;
+      setState(() {
+        activationRequest = request;
+        activationStatus = request?['status'] as String?;
+        checkingActivation = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        activationError = '$e';
+        checkingActivation = false;
+      });
+    }
   }
+
+  Future<void> refreshActivation() async {
+    if (busy) return;
+    setState(() => busy = true);
+    try {
+      await Scope.of(context).reload();
+      if (!mounted) return;
+      await loadActivation();
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> signOut() async {
+    try {
+      await Scope.of(context).api.logout();
+    } catch (e) {
+      if (mounted) message(context, '$e');
+    }
+  }
+
+  Widget pendingReview(Session s) => Width(
+    max: 480,
+    child: ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const Icon(Icons.hourglass_empty_rounded, color: orange, size: 54),
+        const SizedBox(height: 16),
+        Text('طلب اشتراك قيد المراجعة',
+            textAlign: TextAlign.center,
+            style: appText(23, weight: FontWeight.w900)),
+        const SizedBox(height: 10),
+        Text('تم استلام طلب تفعيل المحل. بانتظار تأكيد الحوالة وموافقة الإدارة، ولا تحتاج إلى اختيار باقة أو إرسال طلب جديد.',
+            textAlign: TextAlign.center,
+            style: appText(12, color: secondaryText)),
+        const SizedBox(height: 18),
+        Surface(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('المحل: ${s.shopName}', style: appText(13, weight: FontWeight.w800)),
+              if (activationRequest?['months'] is num) ...[
+                const SizedBox(height: 8),
+                Text('الخطة: ${(activationRequest!['months'] as num).toInt() == 1 ? 'شهر واحد · 60 ₪' : '3 أشهر · 150 ₪'}'),
+              ],
+              if ('${activationRequest?['senderName'] ?? ''}'.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text('اسم صاحب الحوالة: ${activationRequest!['senderName']}'),
+              ],
+              if ('${activationRequest?['destination'] ?? ''}'.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text('وجهة التحويل: ${_paymentDestinationLabel(activationRequest!['destination'].toString())}'),
+              ],
+              const SizedBox(height: 12),
+              const SoftTag('بانتظار موافقة الإدارة'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        BusyButton(
+          label: 'تحديث حالة الطلب',
+          busy: busy,
+          onPressed: refreshActivation,
+        ),
+        const SizedBox(height: 10),
+        TextButton(onPressed: signOut, child: const Text('تسجيل الخروج')),
+      ],
+    ),
+  );
+
+  Widget activationLoadFailure() => Width(
+    max: 480,
+    child: ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const Icon(Icons.error_outline_rounded, color: orange, size: 48),
+        const SizedBox(height: 12),
+        Text('تعذّر التحقق من حالة طلب الاشتراك',
+            textAlign: TextAlign.center,
+            style: appText(20, weight: FontWeight.w900)),
+        const SizedBox(height: 10),
+        Text('لن نطلب منك اختيار باقة جديدة قبل معرفة حالة طلب التفعيل الموجود.',
+            textAlign: TextAlign.center,
+            style: appText(12, color: secondaryText)),
+        const SizedBox(height: 12),
+        if (activationError != null)
+          Text(activationError!, textAlign: TextAlign.center,
+              style: appText(11, color: secondaryText)),
+        const SizedBox(height: 16),
+        BusyButton(
+          label: 'إعادة التحقق',
+          busy: busy,
+          onPressed: refreshActivation,
+        ),
+        const SizedBox(height: 8),
+        TextButton(onPressed: signOut, child: const Text('تسجيل الخروج')),
+      ],
+    ),
+  );
   Future<void> requestRenewal() async {
     if (busy) return;
     if (sender.text.trim().isEmpty) {
@@ -711,15 +867,41 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     setState(() => busy = true);
     try {
       final session = Scope.of(context);
-      await session.api.request('POST', '/api/subscription/activation-request', body: {
-        'months': selected,
-        'senderName': sender.text.trim(),
-        'destination': paymentDestination,
-        'receiptImageBase64': receiptBase64,
-        'receiptContentType': receiptContentType,
+      final submittedMonths = selected;
+      final submittedSender = sender.text.trim();
+      final submittedDestination = paymentDestination;
+      final result = await session.api.request(
+        'POST',
+        '/api/subscription/activation-request',
+        body: {
+          'months': submittedMonths,
+          'senderName': submittedSender,
+          'destination': submittedDestination,
+          'receiptImageBase64': receiptBase64,
+          'receiptContentType': receiptContentType,
+        },
+      );
+      if (!mounted) return;
+      // The successful POST is the authoritative confirmation that the
+      // renewal request was saved. Do not wait for a second GET before
+      // displaying the full pending-review page: it may be stale or fail.
+      if (result is! Map ||
+          '${result['status']}'.toLowerCase() != 'pending') {
+        message(context, 'لم يؤكد الخادم أن طلب الاشتراك قيد المراجعة. تحقّق من حالة الطلب قبل إعادة الإرسال.');
+        return;
+      }
+      setState(() {
+        activationRequest = {
+          if (result is Map && result['id'] != null) 'id': result['id'],
+          'status': 'Pending',
+          'months': submittedMonths,
+          'senderName': submittedSender,
+          'destination': submittedDestination,
+        };
+        activationStatus = 'Pending';
+        activationError = null;
+        checkingActivation = false;
       });
-      await loadActivation();
-      if (mounted) message(context, 'تم تسجيل طلب الاشتراك، بانتظار موافقة الإدارة');
     } catch (e) { if (mounted) message(context, e); }
     finally { if (mounted) setState(() => busy = false); }
   }
@@ -728,10 +910,17 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     final s = Scope.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('الاشتراك والتجديد'),
+        title: Text(activationStatus == 'Pending'
+            ? 'متابعة طلب التفعيل' : 'الاشتراك والتجديد'),
         automaticallyImplyLeading: !widget.gate,
       ),
-      body: Width(
+      body: checkingActivation
+          ? const Center(child: CircularProgressIndicator())
+          : activationStatus == 'Pending'
+          ? pendingReview(s)
+          : activationError != null
+          ? activationLoadFailure()
+          : Width(
         max: 480,
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -762,10 +951,16 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                         : 'صالح حتى ${day(s.status?['paidUntil'])}',
                     style: const TextStyle(color: muted),
                   ),
-                  if (!s.active)
+                  if (!s.active) ...[
+                    const Text('بيانات المحل والزبائن والحركات محفوظة، ويمكنك تجديد الاشتراك دون إنشاء حساب جديد.'),
+                    const SizedBox(height: 12),
+                    Text('خطوات التجديد', style: appText(12, weight: FontWeight.w900)),
                     const Text(
-                      'بيانات محلك محفوظة. تواصل مع الإدارة لاستعادة الوصول.',
+                      '1. اختر مدة الاشتراك المناسبة.\n'
+                      '2. حوّل الرسوم وأدخل معلومات الحوالة.\n'
+                      '3. أرسل الطلب، ثم تابع مراجعته حتى موافقة الإدارة.',
                     ),
+                  ],
                 ],
               ),
             ),
@@ -785,24 +980,18 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
               },
             ),
             const SizedBox(height: 12),
-            if (activationStatus == 'Pending')
-              const SoftTag('طلب التحويل قيد المراجعة لدى الإدارة')
-            else ...[
-              BusyButton(label: 'أرسلت التحويل — إرسال طلب التفعيل',
-                busy: busy, onPressed: requestRenewal),
-              const SizedBox(height: 10),
-              Text('لن يتفعّل الاشتراك إلا بعد اعتماد الحوالة من لوحة الإدارة.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: muted, fontSize: 12)),
-            ],
+            BusyButton(label: 'أرسلت التحويل — إرسال طلب التفعيل',
+              busy: busy, onPressed: requestRenewal),
+            const SizedBox(height: 10),
+            Text('لن يتفعّل الاشتراك إلا بعد اعتماد الحوالة من لوحة الإدارة.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: muted, fontSize: 12)),
             const SizedBox(height: 20),
             OutlinedButton.icon(
               onPressed: busy
                   ? null
                   : () async {
-                      setState(() => busy = true);
-                      await s.reload();
-                      if (mounted) setState(() => busy = false);
+                      await refreshActivation();
                     },
               icon: const Icon(Icons.refresh),
               label: const Text('تحديث حالة الاشتراك'),
@@ -825,6 +1014,12 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   }
 }
 
+String workerDisplayName(Map worker) {
+  final name = '${worker['name'] ?? ''}'.trim();
+  if (name.isNotEmpty) return name;
+  return '${worker['phoneNumber'] ?? 'عامل المحل'}';
+}
+
 class WorkersScreen extends StatefulWidget {
   const WorkersScreen({super.key});
   @override
@@ -835,13 +1030,14 @@ class _WorkersScreenState extends State<WorkersScreen> {
   List<dynamic> workers = [];
   bool loading = true, saving = false;
   String? error;
+  final name = TextEditingController();
   final phone = TextEditingController();
   final password = TextEditingController();
   bool initialized = false;
   @override
   void didChangeDependencies() { super.didChangeDependencies(); if (!initialized) { initialized = true; load(); } }
   @override
-  void dispose() { phone.dispose(); password.dispose(); super.dispose(); }
+  void dispose() { name.dispose(); phone.dispose(); password.dispose(); super.dispose(); }
   Future<void> load() async {
     try {
       final result = await Scope.of(context).api.get('/api/workers');
@@ -851,19 +1047,114 @@ class _WorkersScreenState extends State<WorkersScreen> {
   Future<void> add() async {
     if (saving || workers.length >= 2) return;
     final normalized = phoneNumber(phone.text);
-    if (normalized == null || password.text.length < 12) {
-      message(context, 'أدخل رقم جوال صحيحاً وكلمة مرور من 12 حرفاً على الأقل');
+    if (name.text.trim().isEmpty || name.text.trim().length > 160 ||
+        normalized == null || password.text.length < 12) {
+      message(context, 'أدخل اسم العامل ورقم جوال صحيحاً وكلمة مرور من 12 حرفاً على الأقل');
       return;
     }
     setState(() => saving = true);
     try {
       await Scope.of(context).api.request('POST', '/api/workers',
-        body: {'phoneNumber': normalized, 'password': password.text});
-      phone.clear(); password.clear();
+        body: {
+          'name': name.text.trim(),
+          'phoneNumber': normalized,
+          'password': password.text,
+        });
+      name.clear(); phone.clear(); password.clear();
       await load();
       if (mounted) message(context, 'تمت إضافة العامل بنجاح');
     } catch (e) { if (mounted) message(context, '$e'); }
     finally { if (mounted) setState(() => saving = false); }
+  }
+  Future<void> takeWorkerShift(Map entry) async {
+    if (saving) return;
+    final session = Scope.of(context);
+    if (session.pendingSync > 0 || session.isOffline) {
+      message(context, 'يجب مزامنة الحركات المعلّقة والاتصال بالإنترنت قبل تبديل المناوبة.');
+      return;
+    }
+    final workerPhone = '${entry['phoneNumber'] ?? ''}';
+    final controller = TextEditingController();
+    try {
+      final password = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('استلام مناوبة ${workerDisplayName(entry)}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('يدخل العامل كلمة مروره للتحقق من هويته قبل استلام المناوبة.'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                obscureText: true,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'كلمة مرور العامل'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('إلغاء')),
+            TextButton(onPressed: () {
+              if (controller.text.isNotEmpty) {
+                Navigator.pop(dialogContext, controller.text);
+              }
+            }, child: const Text('استلام المناوبة')),
+          ],
+        ),
+      );
+      if (password == null || !mounted) return;
+      setState(() => saving = true);
+      // Authenticate as the worker: never write transactions in their name
+      // while still using the shop owner's credentials.
+      await session.login(workerPhone, password);
+      session.finishWorkerSetup();
+    } catch (e) {
+      if (mounted) message(context, '$e');
+    } finally {
+      controller.dispose();
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  Future<void> renameWorker(Map entry) async {
+    if (saving) return;
+    final id = '${entry['id']}';
+    final controller = TextEditingController(text: '${entry['name'] ?? ''}');
+    try {
+      final updatedName = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('تعديل اسم العامل'),
+          content: TextField(
+            controller: controller,
+            maxLength: 160,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'اسم العامل'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('إلغاء')),
+            TextButton(onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) Navigator.pop(dialogContext, value);
+            }, child: const Text('حفظ الاسم')),
+          ],
+        ),
+      );
+      if (updatedName == null || !mounted) return;
+      setState(() => saving = true);
+      await Scope.of(context).api.request('PUT', '/api/workers/$id/name',
+          body: {'name': updatedName});
+      await load();
+      if (mounted) message(context, 'تم تحديث اسم العامل');
+    } catch (e) {
+      if (mounted) message(context, '$e');
+    } finally {
+      controller.dispose();
+      if (mounted) setState(() => saving = false);
+    }
   }
   Future<void> disable(String id) async {
     try {
@@ -888,19 +1179,57 @@ class _WorkersScreenState extends State<WorkersScreen> {
         if (loading) const Center(child: CircularProgressIndicator()),
         if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
         for (final entry in workers)
-          Surface(child: Row(children: [
-            const Icon(Icons.person_outline, color: navy),
-            const SizedBox(width: 12),
-            Expanded(child: Text('${entry['phoneNumber']}', style: appText(13))),
-            if (entry['enabled'] == true)
-              TextButton(onPressed: () => disable('${entry['id']}'),
-                child: const Text('تعطيل'))
-            else const SoftTag('معطل'),
-          ])),
+          Surface(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                const Icon(Icons.person_outline, color: navy),
+                const SizedBox(width: 12),
+                Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(workerDisplayName(entry as Map),
+                        style: appText(13, weight: FontWeight.w800)),
+                    Text('${entry['phoneNumber']}',
+                        style: appText(11, color: secondaryText)),
+                  ],
+                )),
+                if (entry['enabled'] != true) const SoftTag('معطل'),
+              ]),
+              if (entry['enabled'] == true)
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 4,
+                  children: [
+                    TextButton.icon(
+                      onPressed: saving ? null : () => takeWorkerShift(
+                          Map<String, dynamic>.from(entry as Map)),
+                      icon: const Icon(Icons.login, size: 17),
+                      label: const Text('استلام المناوبة'),
+                    ),
+                    IconButton(
+                      tooltip: 'تعديل اسم العامل',
+                      onPressed: saving ? null : () => renameWorker(
+                          Map<String, dynamic>.from(entry as Map)),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                    TextButton(
+                      onPressed: saving ? null : () => disable('${entry['id']}'),
+                      child: const Text('تعطيل'),
+                    ),
+                  ],
+                ),
+            ],
+          )),
         if (workers.length < 2) Surface(child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Text('إضافة عامل (${workers.length}/2)',
               style: appText(16, weight: FontWeight.w900)),
+            const SizedBox(height: 12),
+            TextField(controller: name, maxLength: 160,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'اسم العامل')),
             const SizedBox(height: 12),
             TextField(controller: phone, keyboardType: TextInputType.phone,
               decoration: const InputDecoration(labelText: 'رقم جوال العامل')),
@@ -919,6 +1248,79 @@ class _WorkersScreenState extends State<WorkersScreen> {
   }
 }
 
+/// The worker sees their own authenticated identity, not the shop owner's
+/// editable settings or any subscription/payment screens.
+class WorkerProfileScreen extends StatelessWidget {
+  const WorkerProfileScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final session = Scope.of(context);
+    return Scaffold(
+      appBar: AppBar(title: const Text('ملفي الشخصي')),
+      body: Width(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const Heading('بيانات العامل'),
+            Surface(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('الاسم', style: appText(12, color: secondaryText)),
+                Text(session.currentUserName,
+                    style: appText(18, weight: FontWeight.w800)),
+                const SizedBox(height: 14),
+                Text('رقم الجوال', style: appText(12, color: secondaryText)),
+                SelectableText(session.currentUserPhone.isEmpty
+                    ? 'غير متوفر' : session.currentUserPhone,
+                    textDirection: TextDirection.ltr,
+                    style: appText(15, weight: FontWeight.w700)),
+                const SizedBox(height: 18),
+                OutlinedButton.icon(
+                  onPressed: () => open(context, const PasswordScreen()),
+                  icon: const Icon(Icons.lock_outline),
+                  label: const Text('تغيير كلمة المرور'),
+                ),
+              ],
+            )),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Workers may not initiate renewals; only the owner can submit payment details.
+class WorkerSubscriptionLockedScreen extends StatelessWidget {
+  const WorkerSubscriptionLockedScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final session = Scope.of(context);
+    return Scaffold(
+      appBar: AppBar(title: const Text('حالة اشتراك المحل')),
+      body: Width(child: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          const Surface(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.lock_outline, size: 36, color: orange),
+              SizedBox(height: 12),
+              Heading('اشتراك المحل بحاجة إلى تجديد'),
+              Text('يرجى التواصل مع صاحب المحل لتجديد الاشتراك. لا يمكن للعامل اختيار باقة أو إرسال حوالة.'),
+            ],
+          )),
+          const SizedBox(height: 12),
+          BusyButton(label: 'تحديث حالة المحل', onPressed: session.reload),
+          TextButton(onPressed: session.api.clear,
+              child: const Text('تسجيل الخروج')),
+        ],
+      )),
+    );
+  }
+}
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
   @override
@@ -932,6 +1334,108 @@ class _SettingsScreenState extends State<SettingsScreen> {
       phone = TextEditingController();
   bool ready = false, busy = false;
   String? error;
+  final collectionAccounts = <ShopCollectionAccount>[];
+
+  Future<void> editCollectionAccount([int? index]) async {
+    if (busy || (index == null && collectionAccounts.length >= 20)) return;
+    final existing = index == null ? null : collectionAccounts[index];
+    final holder = TextEditingController(text: existing?.accountHolder ?? '');
+    final number = TextEditingController(text: existing?.accountNumber ?? '');
+    final bankName = TextEditingController(text: existing?.bankName ?? '');
+    final key = GlobalKey<FormState>();
+    var method = existing?.method ?? 'Bank';
+    try {
+      final result = await showDialog<ShopCollectionAccount>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, updateDialog) => AlertDialog(
+            title: Text(index == null ? 'إضافة وسيلة تحصيل' : 'تعديل وسيلة التحصيل'),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Form(
+                  key: key,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      DropdownButtonFormField<String>(
+                        initialValue: method,
+                        isExpanded: true,
+                        decoration: const InputDecoration(labelText: 'وجهة التحويل'),
+                        items: collectionMethodLabels.entries.map((entry) =>
+                          DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+                        ).toList(),
+                        onChanged: (value) {
+                          if (value != null) updateDialog(() => method = value);
+                        },
+                      ),
+                      if (method == 'Bank') ...[
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: bankName,
+                          maxLength: 100,
+                          decoration: const InputDecoration(labelText: 'اسم البنك'),
+                          validator: (value) => (value ?? '').trim().isEmpty
+                            ? 'أدخل اسم البنك' : null,
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: holder,
+                        maxLength: 160,
+                        decoration: const InputDecoration(labelText: 'اسم صاحب الحساب'),
+                        validator: (value) => (value ?? '').trim().isEmpty
+                          ? 'أدخل اسم صاحب الحساب' : null,
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: number,
+                        maxLength: 80,
+                        textDirection: TextDirection.ltr,
+                        keyboardType: TextInputType.text,
+                        decoration: const InputDecoration(labelText: 'رقم التحويل / المحفظة / IBAN'),
+                        validator: (value) => (value ?? '').trim().isEmpty
+                          ? 'أدخل رقم الحساب أو المحفظة' : null,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('إلغاء')),
+              FilledButton(
+                onPressed: () {
+                  if (!key.currentState!.validate()) return;
+                  Navigator.pop(dialogContext, ShopCollectionAccount(
+                    method: method,
+                    accountHolder: holder.text.trim(),
+                    accountNumber: number.text.trim(),
+                    bankName: method == 'Bank' ? bankName.text.trim() : '',
+                  ));
+                },
+                child: const Text('اعتماد'),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (result == null || !mounted) return;
+      setState(() {
+        if (index == null) {
+          collectionAccounts.add(result);
+        } else {
+          collectionAccounts[index] = result;
+        }
+        error = null;
+      });
+    } finally {
+      holder.dispose();
+      number.dispose();
+      bankName.dispose();
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -940,6 +1444,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       name.text = s.shopName;
       owner.text = s.settings?['ownerName'] ?? '';
       phone.text = s.settings?['phone'] ?? '';
+      collectionAccounts.addAll(collectionAccountsFromSettings(s.settings));
       ready = true;
     }
   }
@@ -977,8 +1482,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'رقم التواصل هنا لا يغيّر رقم تسجيل الدخول.',
                   style: TextStyle(color: muted, fontSize: 12),
                 ),
+                const SizedBox(height: 18),
+                const Heading('معلومات التحويل والتحصيل'),
+                const Text(
+                  'أضف أكثر من حساب بنكي أو محفظة. ستظهر المعلومات المحفوظة في تقارير المحل وملخصات الزبائن وكشف حسابهم.',
+                  style: TextStyle(color: muted, fontSize: 12),
+                ),
+                const SizedBox(height: 10),
+                for (var index = 0; index < collectionAccounts.length; index++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Surface(
+                      child: Row(
+                        children: [
+                          const Icon(Icons.account_balance_wallet_outlined, color: navy),
+                          const SizedBox(width: 8),
+                          Expanded(child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(collectionAccounts[index].destination,
+                                style: const TextStyle(fontWeight: FontWeight.bold)),
+                              Text(collectionAccounts[index].accountHolder),
+                              SelectableText(collectionAccounts[index].accountNumber,
+                                textDirection: TextDirection.ltr),
+                            ],
+                          )),
+                          IconButton(
+                            tooltip: 'تعديل وسيلة التحصيل',
+                            icon: const Icon(Icons.edit_outlined),
+                            onPressed: busy ? null : () => editCollectionAccount(index),
+                          ),
+                          IconButton(
+                            tooltip: 'حذف وسيلة التحصيل',
+                            icon: const Icon(Icons.delete_outline, color: Colors.red),
+                            onPressed: busy ? null : () => setState(() => collectionAccounts.removeAt(index)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: busy || collectionAccounts.length >= 20
+                    ? null : () => editCollectionAccount(),
+                  icon: const Icon(Icons.add),
+                  label: const Text('إضافة حساب أو محفظة أخرى'),
+                ),
+                const Text(
+                  'يُعتمد الإضافة أو التعديل أو الحذف عند الضغط على «حفظ البيانات» أدناه.',
+                  style: TextStyle(color: muted, fontSize: 11),
+                ),
                 const SizedBox(height: 20),
-                if (error != null) Text(error!),
+                if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
                 BusyButton(
                   label: 'حفظ البيانات',
                   busy: busy,
@@ -994,8 +1548,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           'name': name.text.trim(),
                           'ownerName': owner.text.trim(),
                           'phone': phone.text.trim(),
+                          'collectionAccounts': collectionAccounts.map((e) => e.toJson()).toList(),
                         },
                       );
+                      if (data is! Map || !data.containsKey('collectionAccounts')) {
+                        throw StateError('الخادم لم يدعم حفظ وسائل التحصيل بعد. حدّث Backend أولًا.');
+                      }
                       s.settings = Map<String, dynamic>.from(data);
                       s.changed();
                       if (context.mounted) Navigator.pop(context);
@@ -1156,65 +1714,125 @@ class BackupScreen extends StatefulWidget {
 }
 
 class _BackupScreenState extends State<BackupScreen> {
-  bool busy = false;
+  bool exporting = false;
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('النسخ الاحتياطي')),
-    body: Width(
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Surface(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(Icons.cloud_done_outlined, color: navy, size: 42),
-                const SizedBox(height: 16),
-                const Heading('بيانات محلك محفوظة سحابياً'),
-                const Text(
-                  'الزبائن والموردون والأصناف والحركات مرتبطة بحساب محلك. يمكنك تصدير نسخة إضافية والاحتفاظ بها عند الحاجة.',
-                  style: TextStyle(color: muted),
-                ),
-                const SizedBox(height: 18),
-                BusyButton(
-                  label: 'تصدير نسخة احتياطية',
-                  busy: busy,
-                  icon: Icons.download_outlined,
-                  onPressed: () async {
-                    setState(() => busy = true);
-                    try {
-                      final data = await Scope.of(
-                        context,
-                      ).api.get('/api/backup/export');
-                      if (context.mounted) await Exports.backup(data, context);
-                    } catch (e) {
-                      if (context.mounted) message(context, e);
-                    } finally {
-                      if (mounted) setState(() => busy = false);
-                    }
-                  },
-                ),
-              ],
-            ),
-          ),
-          Surface(
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.sync, color: navy),
-              title: const Text('المزامنة والحركات المحفوظة'),
-              subtitle: Text(
-                '${Scope.of(context).pendingSync} حركة بانتظار المزامنة',
+  Widget build(BuildContext context) {
+    final session = Scope.of(context);
+    return Scaffold(
+      appBar: AppBar(title: const Text('الحفظ واستعادة البيانات')),
+      body: Width(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Surface(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Icon(Icons.cloud_done_outlined, color: navy, size: 42),
+                  SizedBox(height: 16),
+                  Heading('بيانات المحل محفوظة على حسابك'),
+                  SizedBox(height: 8),
+                  Text(
+                    'الزبائن والموردون والأصناف والحركات التي تمت مزامنتها '
+                    'محفوظة على السيرفر، وليست مرتبطة بهذا الهاتف وحده.',
+                    style: TextStyle(color: muted),
+                  ),
+                  SizedBox(height: 18),
+                  Heading('كيف تستعيد بياناتك على جهاز آخر؟'),
+                  SizedBox(height: 10),
+                  Text('1. نزّل تطبيق دفتر دين على الجهاز الآخر.'),
+                  SizedBox(height: 6),
+                  Text('2. سجّل الدخول برقم جوالك وكلمة مرور حسابك نفسه.'),
+                  SizedBox(height: 6),
+                  Text('3. مع اتصال الإنترنت واشتراك المحل الفعّال، '
+                      'ستظهر بيانات المحل التي وصلت إلى السيرفر.'),
+                ],
               ),
-              trailing: const Icon(Icons.chevron_left),
-              onTap: () => open(context, const SyncCenterScreen()),
             ),
-          ),
-          const Text(
-            'الملف يحتوي على بيانات المحل كاملة بصيغة JSON. احفظه في مكان خاص وآمن.',
-            style: TextStyle(color: muted, fontSize: 12),
-          ),
-        ],
+            Surface(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        session.pendingSync > 0
+                            ? Icons.warning_amber_rounded
+                            : Icons.cloud_done_outlined,
+                        color: session.pendingSync > 0 ? orange : navy,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          session.pendingSync > 0
+                              ? '${session.pendingSync} حركة لم تُزامَن بعد'
+                              : 'لا توجد حركات معلّقة للمزامنة',
+                          style: appText(14, weight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'مهم: الحركات التي لم تُزامَن تبقى على الجهاز الحالي '
+                    'ولا تنتقل تلقائيًا إلى هاتف آخر. شغّل الإنترنت وأكمل '
+                    'المزامنة قبل تبديل الجهاز أو تسجيل الخروج.',
+                    style: TextStyle(color: muted),
+                  ),
+                  const SizedBox(height: 12),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.sync, color: navy),
+                    title: const Text('فحص الحركات ومزامنتها'),
+                    trailing: const Icon(Icons.chevron_left),
+                    onTap: () => open(context, const SyncCenterScreen()),
+                  ),
+                ],
+              ),
+            ),
+            if (session.isOwner)
+              Surface(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Heading('نسخة أرشيفية اختيارية (JSON)'),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'يمكنك تنزيل ملف أرشيفي لبيانات الدفتر المتاحة في '
+                      'التصدير. هذا الملف ليس وسيلة لاستعادة الحساب؛ '
+                      'التطبيق لا يدعم استيراد JSON، ولا يغني التصدير '
+                      'عن مزامنة الحركات مع السيرفر.',
+                      style: TextStyle(color: muted),
+                    ),
+                    const SizedBox(height: 14),
+                    BusyButton(
+                      label: 'تنزيل ملف JSON أرشيفي',
+                      busy: exporting,
+                      icon: Icons.download_outlined,
+                      onPressed: () async {
+                        setState(() => exporting = true);
+                        try {
+                          final data = await session.api.get('/api/backup/export');
+                          if (context.mounted) await Exports.backup(data, context);
+                        } catch (e) {
+                          if (context.mounted) message(context, e);
+                        } finally {
+                          if (mounted) setState(() => exporting = false);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'يحوي الملف معلومات عملاء وحركات حساسة؛ احتفظ به '
+                      'في مكان آمن ولا تشاركه مع الآخرين.',
+                      style: TextStyle(color: muted, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

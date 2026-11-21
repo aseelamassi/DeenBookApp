@@ -33,6 +33,19 @@ class Session extends ChangeNotifier {
   bool get isOffline => api.isOffline;
   bool get isTrial => status?['isTrial'] == true;
   bool get isOwner => status?['isOwner'] != false;
+  // Identity returned by the authenticated subscription endpoint.
+  // Do not substitute the shop name for a worker's identity.
+  String get currentUserName {
+    final name = '${status?['userName'] ?? ''}'.trim();
+    if (name.isNotEmpty) return name;
+    if (isOwner) {
+      final owner = '${settings?['ownerName'] ?? ''}'.trim();
+      return owner.isNotEmpty ? owner : 'صاحب المحل';
+    }
+    final workerPhone = '${status?['userPhone'] ?? ''}'.trim();
+    return workerPhone.isNotEmpty ? workerPhone : 'عامل المحل';
+  }
+  String get currentUserPhone => '${status?['userPhone'] ?? ''}'.trim();
   int get trialDaysRemaining {
     if (!isTrial) return 0;
     if (!isOffline) {

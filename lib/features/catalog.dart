@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 
 import '../core/api.dart';
 import '../core/format.dart';
+import '../core/contact_phone.dart';
+import '../core/collection_accounts.dart';
 import '../core/ledger.dart';
 import '../services/receipts.dart';
 import '../core/session.dart';
@@ -27,6 +29,31 @@ class CatalogScreen extends StatefulWidget {
 
 class _CatalogScreenState extends State<CatalogScreen> {
   final search = TextEditingController();
+  final _searchFocus = FocusNode();
+
+  // Android can hide the keyboard while the TextField remains focused.
+  // When it is tapped again, make the next character append to the query
+  // instead of being inserted before its final Arabic letter.
+  void _putSearchCaretAtEnd() {
+    if (!mounted || !_searchFocus.hasFocus) return;
+    final end = search.text.length;
+    if (end == 0) return;
+    if (!search.selection.isCollapsed || search.selection.extentOffset != end) {
+      search.selection = TextSelection.collapsed(offset: end);
+    }
+  }
+
+  void _onSearchFocusChanged() {
+    if (!_searchFocus.hasFocus) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _putSearchCaretAtEnd());
+  }
+
+  void _onSearchTap() {
+    // The field's built-in gesture and the Android IME may both adjust the
+    // selection. Apply it now and once more after gesture processing.
+    _putSearchCaretAtEnd();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _putSearchCaretAtEnd());
+  }
   Timer? debounce;
   List<Json> rows = [];
   Json? overview;
@@ -53,12 +80,15 @@ class _CatalogScreenState extends State<CatalogScreen> {
   @override
   void initState() {
     super.initState();
+    _searchFocus.addListener(_onSearchFocusChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => load());
   }
 
   @override
   void dispose() {
     debounce?.cancel();
+    _searchFocus.removeListener(_onSearchFocusChanged);
+    _searchFocus.dispose();
     search.dispose();
     super.dispose();
   }
@@ -225,7 +255,10 @@ class _CatalogScreenState extends State<CatalogScreen> {
                   decoration: BoxDecoration(
                     color: alert ? creditRosePale : const Color(0xFFF7F8FB),
                     borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: alert ? warningColor : lineColor),
+                    // The warning border belongs to the entire customer card
+                    // (Surface), not to this inner balance area. Keep the soft
+                    // warning fill and the monetary amount visible.
+                    border: alert ? null : Border.all(color: lineColor),
                   ),
                   child: Column(
                     children: [
@@ -459,6 +492,15 @@ class _CatalogScreenState extends State<CatalogScreen> {
               ),
             ],
           ),
+          if (supplier) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('supplier-catalog-return'),
+              onPressed: () => transact('Return'),
+              icon: const Icon(Icons.keyboard_return_outlined),
+              label: const Text('مرتجع بضاعة للمورد'),
+            ),
+          ],
         ],
       ],
     ),
@@ -605,18 +647,11 @@ class _CatalogScreenState extends State<CatalogScreen> {
                   child: TextField(
                     key: const Key('catalog-search'),
                     controller: search,
-                    // On a second tap after dismissing the keyboard, some RTL
-                    // keyboards restore the caret before the final character.
-                    // Put it at the logical end so typing continues normally.
-                    // Never modify search.text or move the caret on onChanged.
-                    onTap: () {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (!mounted || search.text.isEmpty) return;
-                        search.selection = TextSelection.collapsed(
-                          offset: search.text.length,
-                        );
-                      });
-                    },
+                    focusNode: _searchFocus,
+                    // Android can reopen the keyboard without changing focus.
+                    // Call our cursor fix on every tap, including repeat taps.
+                    onTapAlwaysCalled: true,
+                    onTap: _onSearchTap,
                     style: appText(12),
                     decoration: InputDecoration(
                       hintText: products
@@ -689,6 +724,41 @@ class _CatalogScreenState extends State<CatalogScreen> {
                 ],
               ],
             ),
+            if (!products && supplier) ...[
+              const SizedBox(height: 12),
+              DesignChips<String?>(
+                key: const Key('supplier-account-filters'),
+                items: {
+                  null: 'الكل ${overview?['total'] ?? 0}',
+                  'owing': 'لهم مستحقات ${overview?['owing'] ?? 0}',
+                  'credit': 'لنا رصيد ${overview?['credit'] ?? 0}',
+                  'settled': 'حساب خالص ${overview?['settled'] ?? 0}',
+                  'scheduled': 'توريد مجدول ${overview?['scheduled'] ?? 0}',
+                  'today': 'توريد اليوم',
+                },
+                selected: filter,
+                onSelected: (v) {
+                  setState(() => filter = v);
+                  load();
+                },
+              ),
+              if ((overview?['categories'] as List? ?? []).isNotEmpty) ...[
+                const SizedBox(height: 8),
+                DesignChips<String?>(
+                  key: const Key('supplier-category-filters'),
+                  items: {
+                    null: 'كل فئات الموردين',
+                    for (final c in (overview?['categories'] as List? ?? []))
+                      '$c': '$c',
+                  },
+                  selected: category,
+                  onSelected: (v) {
+                    setState(() => category = v);
+                    load();
+                  },
+                ),
+              ],
+            ],
             if (!products && !supplier) ...[
               const SizedBox(height: 12),
               DesignChips<String?>(
@@ -884,7 +954,10 @@ class _PartyFormState extends State<PartyForm> {
         for (final e in fields.entries)
           if (e.key != 'creditLimit' &&
               (modern || !['alternatePhone', 'alternateContact'].contains(e.key)))
-            e.key: e.value.text.trim(),
+            e.key: ['phone', 'alternatePhone'].contains(e.key)
+                ? (internationalContactPhone(e.value.text) ??
+                    e.value.text.trim())
+                : e.value.text.trim(),
         if (!widget.supplier && session.isOwner)
           'creditLimit': (cents(fields['creditLimit']!.text.trim()) ?? 0) / 100,
         'openingBalance':
@@ -958,9 +1031,17 @@ class _PartyFormState extends State<PartyForm> {
                         'رقم الجوال (اختياري)',
                         max: 30,
                         keyboard: TextInputType.phone,
+                        validator: partyContactPhoneError,
                       ),
                     ),
                   ],
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    'الرقم المحلي يُحفظ بمقدمة +970 تلقائيًا. ولرقم +972 اكتبي المقدمة الدولية.',
+                    style: appText(11, color: secondaryText),
+                  ),
                 ),
                 if (modern && !widget.supplier) ...[
                   field(
@@ -968,6 +1049,7 @@ class _PartyFormState extends State<PartyForm> {
                     'رقم إضافي (اختياري)',
                     max: 30,
                     keyboard: TextInputType.phone,
+                    validator: partyContactPhoneError,
                   ),
                   field(
                     fields['alternateContact']!,
@@ -1102,14 +1184,11 @@ class _SupplierDetailState extends State<SupplierDetail> {
   }
 
   Future<void> voidEntry(Json entry) async {
-    if (!await confirm(context, 'شطب الحركة',
-        'سيتم إلغاء أثر الحركة المالي مع الاحتفاظ بسجل التدقيق. هل أنت متأكد؟')) {
-      return;
-    }
-    if (!mounted) return;
+    final reason = await askVoidReason(context);
+    if (reason == null || !mounted) return;
     try {
       final session = Scope.of(context);
-      await session.api.request('POST', '/api/transactions/${entry['id']}/void');
+      await session.api.request('POST', '/api/transactions/${entry['id']}/void', body: {'reason': reason});
       session.changed();
       if (mounted) refresh();
     } catch (error) {
@@ -1227,6 +1306,13 @@ class _SupplierDetailState extends State<SupplierDetail> {
                   ),
                 ],
               ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                key: const Key('supplier-detail-return'),
+                onPressed: () => action(supplier, 'Return'),
+                icon: const Icon(Icons.keyboard_return_outlined),
+                label: const Text('مرتجع بضاعة للمورد'),
+              ),
               const SizedBox(height: 14),
               Surface(
                 child: Column(
@@ -1242,7 +1328,7 @@ class _SupplierDetailState extends State<SupplierDetail> {
                       ],
                     ),
                     const SizedBox(height: 7),
-                    Text('فواتير البضاعة ودفعات المورد، مع تفاصيل الأصناف وسعر الجملة.',
+                    Text('فواتير البضاعة ودفعات المورد والمرتجعات، مع تفاصيل الأصناف وسعر الجملة.',
                         style: appText(11, color: secondaryText)),
                     const SizedBox(height: 12),
                     if (entries.isEmpty)
@@ -1350,7 +1436,7 @@ class _PartyDetailState extends State<PartyDetail> {
         appBar: AppBar(
           title: Text(data?['party']?['kind'] == 'Supplier'
               ? 'بطاقة حساب مورد'
-              : 'كشف الحساب'),
+              : 'بطاقة حساب زبون'),
           actions: [
             IconButton(
               tooltip: 'مشاركة كشف الحساب',
@@ -1361,6 +1447,7 @@ class _PartyDetailState extends State<PartyDetail> {
                           context,
                           data!,
                           Scope.of(context).shopName,
+                          collectionAccounts: collectionAccountsFromSettings(Scope.of(context).settings),
                         );
                       } catch (e) {
                         if (context.mounted) message(context, e);
@@ -1378,6 +1465,7 @@ class _PartyDetailState extends State<PartyDetail> {
                           Scope.of(context).shopName,
                           data!,
                           range: range,
+                          collectionAccounts: collectionAccountsFromSettings(Scope.of(context).settings),
                         );
                       } catch (e) {
                         if (context.mounted) message(context, e);
@@ -1440,12 +1528,31 @@ class _PartyDetailState extends State<PartyDetail> {
                               },
                             ),
                           ),
-                          Text(
-                            balanceLabel(
-                              Map<String, dynamic>.from(data['party']),
+                          const SizedBox(height: 8),
+                          // Same primary balance card layout as the supplier
+                          // statement, keeping customer credit-limit controls.
+                          Container(
+                            key: const Key('customer-detail-balance-card'),
+                            padding: const EdgeInsets.all(15),
+                            decoration: BoxDecoration(
+                              color: paleOrange,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  balanceLabel(Map<String, dynamic>.from(data['party'])),
+                                  style: appText(12, color: secondaryText),
+                                ),
+                                const SizedBox(height: 4),
+                                amount((data['party']['balance'] as num).abs(),
+                                    size: 28,
+                                    color: (data['party']['balance'] as num) < 0
+                                        ? green : orange),
+                              ],
                             ),
                           ),
-                          amount((data['party']['balance'] as num).abs()),
                           if (data['party']['kind'] == 'Customer') ...[
                             CreditLimitGauge(
                               balance: (data['party']['balance'] as num? ?? 0),
@@ -1468,7 +1575,10 @@ class _PartyDetailState extends State<PartyDetail> {
                                 onPressed: () async {
                                   await Clipboard.setData(
                                     ClipboardData(
-                                      text: '${data['party'][key]}',
+                                      text: internationalContactPhone(
+                                            '${data['party'][key]}',
+                                          ) ??
+                                          '${data['party'][key]}',
                                     ),
                                   );
                                   if (context.mounted) {
@@ -1477,7 +1587,7 @@ class _PartyDetailState extends State<PartyDetail> {
                                 },
                                 icon: const Icon(Icons.copy, size: 16),
                                 label: Text(
-                                  '${key == 'alternatePhone' ? '${data['party']['alternateContact'] ?? 'هاتف إضافي'}: ' : ''}${data['party'][key]}',
+                                  '${key == 'alternatePhone' ? '${data['party']['alternateContact'] ?? 'هاتف إضافي'}: ' : ''}${internationalContactPhone('${data['party'][key]}') ?? data['party'][key]}',
                                 ),
                               ),
                           if ('${data['party']['paymentSchedule'] ?? ''}'
@@ -1495,7 +1605,7 @@ class _PartyDetailState extends State<PartyDetail> {
                                     ? 'Purchase'
                                     : 'Debt',
                                 'Payment',
-                                if (data['party']['kind'] != 'Supplier') 'Return',
+                                'Return',
                               ])
                                 OutlinedButton(
                                   onPressed: () async {
@@ -1509,6 +1619,7 @@ class _PartyDetailState extends State<PartyDetail> {
                                         TransactionScreen(
                                           kind: kind,
                                           party: current,
+                                          supplier: current['kind'] == 'Supplier',
                                         ),
                                       );
                                       if (mounted) refresh();
@@ -1519,7 +1630,9 @@ class _PartyDetailState extends State<PartyDetail> {
                                   child: Text(data['party']['kind'] == 'Supplier'
                                       ? (kind == 'Purchase'
                                           ? 'تسجيل فاتورة مورد'
-                                          : 'سداد دفعة لمورد')
+                                          : kind == 'Payment'
+                                              ? 'سداد دفعة لمورد'
+                                              : 'مرتجع بضاعة للمورد')
                                       : kinds[kind]!),
                                 ),
                             ],
@@ -1581,8 +1694,7 @@ class _PartyDetailState extends State<PartyDetail> {
                         ],
                       ),
                     ),
-                    if (data['party']['kind'] == 'Supplier')
-                      Surface(
+                    Surface(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
@@ -1590,27 +1702,37 @@ class _PartyDetailState extends State<PartyDetail> {
                                 style: appText(14, weight: FontWeight.w800)),
                             const SizedBox(height: 6),
                             Text(
-                              'تظهر هنا فواتير المورد وأصنافها بالتفصيل ودفعات السداد.',
+                              data['party']['kind'] == 'Supplier'
+                                  ? 'فواتير المورد ودفعات السداد والمرتجعات، مع تفاصيل الأصناف.'
+                                  : 'مشتريات الزبون والدفعات المؤكدة والمرتجعات، مع الحفاظ على الحركات المشطوبة في السجل.',
                               style: appText(11, color: secondaryText),
                             ),
                             const SizedBox(height: 10),
                             Row(
                               children: [
                                 Expanded(child: metric(
-                                  'إجمالي الفواتير',
-                                  (data['entries'] as List).where((e) => e['kind'] == 'Purchase')
-                                      .fold<double>(0, (sum, e) => sum +
-                                          ((e['amount'] as num?) ?? 0).toDouble() -
-                                          ((e['discount'] as num?) ?? 0).toDouble()),
+                                  data['party']['kind'] == 'Supplier'
+                                      ? 'إجمالي الفواتير'
+                                      : 'إجمالي المشتريات',
+                                  historyTotals(
+                                    (data['entries'] as List)
+                                        .map((e) => Map<String, dynamic>.from(e as Map))
+                                        .toList(),
+                                    supplier: data['party']['kind'] == 'Supplier',
+                                  )['invoices'],
                                 )),
                                 const SizedBox(width: 8),
                                 Expanded(child: metric(
-                                  'إجمالي المدفوع',
-                                  (data['entries'] as List).fold<double>(0,
-                                      (sum, e) => sum +
-                                          (e['kind'] == 'Payment'
-                                              ? ((e['amount'] as num?) ?? 0).toDouble()
-                                              : ((e['paidNow'] as num?) ?? 0).toDouble())),
+                                  data['party']['kind'] == 'Supplier'
+                                      ? 'مدفوع للمورد'
+                                      : 'الدفعات المؤكدة',
+                                  historyTotals(
+                                    (data['entries'] as List)
+                                        .map((e) => Map<String, dynamic>.from(e as Map))
+                                        .toList(),
+                                    supplier: data['party']['kind'] == 'Supplier',
+                                  )[data['party']['kind'] == 'Supplier'
+                                      ? 'paid' : 'received'],
                                 )),
                               ],
                             ),
@@ -1631,13 +1753,13 @@ class _PartyDetailState extends State<PartyDetail> {
                                   e,
                                   supplier: data['party']['kind'] == 'Supplier',
                                   onVoid: Scope.of(context).isOwner ? () async {
-                                    if (!await confirm(context, 'شطب الحركة',
-                                        'سيتم إلغاء الأثر المالي للحركة من كشف الحساب مع الاحتفاظ بسجل تدقيق. هل أنت متأكد؟')) return;
-                                    if (!context.mounted) return;
+                                    final reason = await askVoidReason(context);
+                                    if (reason == null || !context.mounted) return;
                                     try {
                                       final session = Scope.of(context);
                                       await session.api.request('POST',
-                                          '/api/transactions/${e['id']}/void');
+                                          '/api/transactions/${e['id']}/void',
+                                          body: {'reason': reason});
                                       session.changed();
                                       if (mounted) refresh();
                                     } catch (error) {
@@ -1691,16 +1813,14 @@ class _ProductFormState extends State<ProductForm> {
       'salePrice',
       'purchasePrice',
     ]) {
-      fields[k] = TextEditingController(
-        text:
-            '${widget.existing?[k] ?? (k.endsWith('Price')
-                    ? '0'
-                    : k == 'category'
-                    ? 'عام'
-                    : k == 'unit'
-                    ? 'قطعة'
-                    : '')}',
-      );
+      final savedValue = widget.existing?[k];
+      final initialText = k.endsWith('Price')
+          // No leading zero that the merchant must delete before typing.
+          ? (savedValue == null || (cents('$savedValue') ?? 0) == 0
+              ? ''
+              : '$savedValue')
+          : '${savedValue ?? (k == 'category' ? 'عام' : k == 'unit' ? 'قطعة' : '')}';
+      fields[k] = TextEditingController(text: initialText);
     }
   }
 
@@ -1724,7 +1844,9 @@ class _ProductFormState extends State<ProductForm> {
           'pricingMode': pricingMode,
           for (final e in fields.entries)
             e.key: e.key.endsWith('Price')
-                ? cents(e.value.text)! / 100
+                // Purchase price is optional; blank means no recorded cost.
+                // Sale price is mandatory and has already passed validation.
+                ? (cents(e.value.text) ?? 0) / 100
                 : e.value.text.trim(),
         },
       );
@@ -1841,8 +1963,11 @@ class _ProductFormState extends State<ProductForm> {
                       keyboard: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      validator: (v) =>
-                          cents(v ?? '') == null ? 'أدخل سعراً صحيحاً' : null,
+                      validator: (v) => v == null || v.trim().isEmpty
+                          ? null
+                          : cents(v) == null
+                              ? 'أدخل سعر شراء صحيحًا أو اتركه فارغًا'
+                              : null,
                     ),
                   ],
                 ),

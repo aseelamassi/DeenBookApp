@@ -15,6 +15,7 @@ void main() {
         'invoices': 90.20,
         'received': 110.75,
         'paid': 0,
+        'returns': 12.0,
         'pendingCount': 1,
       });
       expect(historyTotals(rows, supplier: true)['paid'], 110.75);

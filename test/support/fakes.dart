@@ -107,6 +107,8 @@ Future<Session> fakeSession({
     switch (r.path) {
       case '/api/capabilities':
         return response({'ledgerVersion': 2});
+      case '/api/subscription/activation':
+        return response({'request': null});
       case '/api/customers/overview':
       case '/api/suppliers/overview':
         return response({

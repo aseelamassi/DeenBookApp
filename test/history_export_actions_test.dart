@@ -8,7 +8,7 @@ import 'package:deenbook/ui/theme.dart';
 import 'support/fakes.dart';
 
 void main() {
-  testWidgets('customer, supplier and payment tabs allow export confirmation with an outbox', (tester) async {
+  testWidgets('customer and supplier tabs allow export confirmation with an outbox', (tester) async {
     tester.view.physicalSize = const Size(430, 860);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -41,7 +41,7 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    for (final category in ['الزبائن', 'الموردون', 'المدفوعات']) {
+    for (final category in ['الزبائن', 'الموردون']) {
       await tester.ensureVisible(find.text(category).first);
       await tester.tap(find.text(category).first);
       await tester.pumpAndSettle();

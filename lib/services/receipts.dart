@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../core/api.dart';
+import '../core/collection_accounts.dart';
+import '../core/contact_phone.dart';
 import '../core/format.dart';
 import '../core/session.dart';
 import '../ui/widgets.dart';
@@ -12,17 +14,15 @@ class Receipts {
     String text,
     String phone,
   ) async {
-    var number = digits(phone).replaceAll(RegExp(r'\D'), '');
-    if (number.startsWith('00')) number = number.substring(2);
-    if (number.startsWith('0') && number.length == 10) {
-      number = '970${number.substring(1)}';
-    }
-    if (number.length >= 10 &&
-        await launchUrl(
-          Uri.https('wa.me', '/$number', {'text': text}),
-          mode: LaunchMode.externalApplication,
-        )) {
-      return;
+    final uri = whatsappContactUri(phone, text);
+    if (uri != null) {
+      try {
+        if (await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+          return;
+        }
+      } catch (_) {
+        // A missing WhatsApp handler must not lose the statement text.
+      }
     }
     if (!context.mounted) return;
     final box = context.findRenderObject() as RenderBox?;
@@ -49,10 +49,11 @@ class Receipts {
   static Future<void> statement(
     BuildContext context,
     Json s,
-    String shop,
-  ) => draft(
+    String shop, {
+    List<ShopCollectionAccount> collectionAccounts = const [],
+  }) => draft(
     context,
-    '$shop\nكشف حساب ${s['party']['name']}\nرصيد بداية الفترة: ${money(s['openingBalance'])}\n${(s['entries'] as List).map((e) => '${dateTimeStamp(e['occurredAt'])} · ${kinds[e['kind']]} · ${money((e['amount'] as num) - (e['discount'] as num? ?? 0))}${e['pendingConfirmation'] == true ? ' (بانتظار التأكيد)' : ''}').join('\n')}\nرصيد نهاية الفترة: ${money(s['closingBalance'])}',
+    '$shop\nكشف حساب ${s['party']['name']}\nرصيد بداية الفترة: ${money(s['openingBalance'])}\n${(s['entries'] as List).map((e) => '${dateTimeStamp(e['occurredAt'])} · ${kinds[e['kind']]} · ${money((e['amount'] as num) - (e['discount'] as num? ?? 0))}${e['pendingConfirmation'] == true ? ' (بانتظار التأكيد)' : ''}').join('\n')}\nرصيد نهاية الفترة: ${money(s['closingBalance'])}${s['party']['kind'] == 'Customer' && collectionAccounts.isNotEmpty ? '\n${collectionAccountLines(collectionAccounts).join('\n')}' : ''}',
     '${s['party']['phone'] ?? ''}',
   );
   static Future<bool> confirmTransfer(BuildContext context, Json entry) async {
@@ -66,10 +67,17 @@ class Receipts {
     if (!context.mounted) return false;
     final session = Scope.of(context);
     try {
-      await session.api.request(
+      final updated = await session.api.request(
         'POST',
         '/api/transactions/${entry['id']}/confirm',
       );
+      // Make the confirmation visible in the current tile immediately.
+      if (updated is Map) {
+        entry.addAll(Map<String, dynamic>.from(updated));
+      } else {
+        entry['pendingConfirmation'] = false;
+      }
+      // Re-fetch balances and statements from the backend after confirmation.
       session.changed();
       return true;
     } catch (e) {

@@ -187,7 +187,9 @@ class _RemoteState extends State<Remote> {
           '${s.error}',
           icon: Icons.cloud_off_outlined,
           action: OutlinedButton(
-            onPressed: () => setState(() => future = widget.load()),
+            onPressed: () => setState(() {
+              future = widget.load();
+            }),
             child: const Text('إعادة المحاولة'),
           ),
         );

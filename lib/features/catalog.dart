@@ -1173,7 +1173,9 @@ class _SupplierDetailState extends State<SupplierDetail> {
     '/api/parties/${widget.id}/statement',
   );
 
-  void refresh() => setState(() => future = load());
+  void refresh() => setState(() {
+    future = load();
+  });
 
   Future<void> action(Json supplier, String kind) async {
     await open(
@@ -1375,7 +1377,9 @@ class _PartyDetailState extends State<PartyDetail> {
     '/api/parties/${widget.id}/statement',
     query: range == null ? null : period(range!.start, range!.end),
   );
-  void refresh() => setState(() => future = load());
+  void refresh() => setState(() {
+    future = load();
+  });
 
   Future<void> _editCreditLimit(Json party) async {
     final initial = party['creditLimit'];

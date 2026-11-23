@@ -33,7 +33,9 @@ class _SyncCenterScreenState extends State<SyncCenterScreen> {
     final session = Scope.of(context);
     final sent = await session.synchronize();
     if (!mounted) return;
-    setState(() => future = load());
+    setState(() {
+      future = load();
+    });
     message(
       context,
       session.syncError ??
@@ -122,7 +124,9 @@ class _SyncCenterScreenState extends State<SyncCenterScreen> {
                                     '${record['operationId']}',
                                   );
                                   await session.updatePending();
-                                  if (mounted) setState(() => future = load());
+                                  if (mounted) setState(() {
+                                    future = load();
+                                  });
                                 },
                               ),
                             ] else

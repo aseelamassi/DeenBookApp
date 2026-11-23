@@ -1041,7 +1041,15 @@ class _WorkersScreenState extends State<WorkersScreen> {
   Future<void> load() async {
     try {
       final result = await Scope.of(context).api.get('/api/workers');
-      if (mounted) setState(() { workers = (result['workers'] as List?) ?? []; loading = false; error = null; });
+      if (mounted) setState(() {
+        // Disabled accounts are treated as deleted in the owner interface and
+        // do not occupy one of the two active worker slots.
+        workers = ((result['workers'] as List?) ?? [])
+            .where((entry) => entry is Map && entry['enabled'] == true)
+            .toList();
+        loading = false;
+        error = null;
+      });
     } catch (e) { if (mounted) setState(() { loading = false; error = '$e'; }); }
   }
   Future<void> add() async {
@@ -1066,58 +1074,6 @@ class _WorkersScreenState extends State<WorkersScreen> {
     } catch (e) { if (mounted) message(context, '$e'); }
     finally { if (mounted) setState(() => saving = false); }
   }
-  Future<void> takeWorkerShift(Map entry) async {
-    if (saving) return;
-    final session = Scope.of(context);
-    if (session.pendingSync > 0 || session.isOffline) {
-      message(context, 'يجب مزامنة الحركات المعلّقة والاتصال بالإنترنت قبل تبديل المناوبة.');
-      return;
-    }
-    final workerPhone = '${entry['phoneNumber'] ?? ''}';
-    final controller = TextEditingController();
-    try {
-      final password = await showDialog<String>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text('استلام مناوبة ${workerDisplayName(entry)}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('يدخل العامل كلمة مروره للتحقق من هويته قبل استلام المناوبة.'),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                obscureText: true,
-                autofocus: true,
-                decoration: const InputDecoration(labelText: 'كلمة مرور العامل'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('إلغاء')),
-            TextButton(onPressed: () {
-              if (controller.text.isNotEmpty) {
-                Navigator.pop(dialogContext, controller.text);
-              }
-            }, child: const Text('استلام المناوبة')),
-          ],
-        ),
-      );
-      if (password == null || !mounted) return;
-      setState(() => saving = true);
-      // Authenticate as the worker: never write transactions in their name
-      // while still using the shop owner's credentials.
-      await session.login(workerPhone, password);
-      session.finishWorkerSetup();
-    } catch (e) {
-      if (mounted) message(context, '$e');
-    } finally {
-      controller.dispose();
-      if (mounted) setState(() => saving = false);
-    }
-  }
-
   Future<void> renameWorker(Map entry) async {
     if (saving) return;
     final id = '${entry['id']}';
@@ -1156,11 +1112,37 @@ class _WorkersScreenState extends State<WorkersScreen> {
       if (mounted) setState(() => saving = false);
     }
   }
-  Future<void> disable(String id) async {
+  Future<void> deleteWorker(Map entry) async {
+    if (saving) return;
+    final id = '${entry['id']}';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('حذف العامل'),
+        content: Text(
+          'هل تريد حذف حساب ${workerDisplayName(entry)}؟ بعد الحذف يمكن إضافة عامل جديد مكانه.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('حذف العامل'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => saving = true);
     try {
       await Scope.of(context).api.request('DELETE', '/api/workers/$id');
       await load();
+      if (mounted) message(context, 'تم حذف العامل، ويمكنك إضافة عامل جديد الآن');
     } catch (e) { if (mounted) message(context, '$e'); }
+    finally { if (mounted) setState(() => saving = false); }
   }
   @override
   Widget build(BuildContext context) {
@@ -1194,32 +1176,27 @@ class _WorkersScreenState extends State<WorkersScreen> {
                         style: appText(11, color: secondaryText)),
                   ],
                 )),
-                if (entry['enabled'] != true) const SoftTag('معطل'),
               ]),
-              if (entry['enabled'] == true)
-                Wrap(
-                  alignment: WrapAlignment.end,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 4,
-                  children: [
-                    TextButton.icon(
-                      onPressed: saving ? null : () => takeWorkerShift(
-                          Map<String, dynamic>.from(entry as Map)),
-                      icon: const Icon(Icons.login, size: 17),
-                      label: const Text('استلام المناوبة'),
-                    ),
-                    IconButton(
-                      tooltip: 'تعديل اسم العامل',
-                      onPressed: saving ? null : () => renameWorker(
-                          Map<String, dynamic>.from(entry as Map)),
-                      icon: const Icon(Icons.edit_outlined),
-                    ),
-                    TextButton(
-                      onPressed: saving ? null : () => disable('${entry['id']}'),
-                      child: const Text('تعطيل'),
-                    ),
-                  ],
-                ),
+              Wrap(
+                alignment: WrapAlignment.end,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 4,
+                children: [
+                  TextButton.icon(
+                    onPressed: saving ? null : () => renameWorker(
+                        Map<String, dynamic>.from(entry as Map)),
+                    icon: const Icon(Icons.edit_outlined, size: 17),
+                    label: const Text('تعديل الاسم'),
+                  ),
+                  TextButton.icon(
+                    onPressed: saving ? null : () => deleteWorker(
+                        Map<String, dynamic>.from(entry as Map)),
+                    icon: const Icon(Icons.delete_outline, size: 17),
+                    label: const Text('حذف'),
+                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                  ),
+                ],
+              ),
             ],
           )),
         if (workers.length < 2) Surface(child: Column(
@@ -1241,7 +1218,7 @@ class _WorkersScreenState extends State<WorkersScreen> {
           ],
         )),
         const SizedBox(height: 10),
-        Text('يسجل العامل الدخول من جهازه برقم الجوال وكلمة مروره، وتُحفظ الحركات في دفتر المحل نفسه.',
+        Text('يسجل صاحب المحل وكل عامل الدخول من جهازه في أي وقت. تُحفظ الحركات في دفتر المحل نفسه مع تسجيل اسم المستخدم الذي نفّذ كل حركة.',
           style: appText(11, color: secondaryText)),
       ])),
     );
@@ -1555,8 +1532,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         throw StateError('الخادم لم يدعم حفظ وسائل التحصيل بعد. حدّث Backend أولًا.');
                       }
                       s.settings = Map<String, dynamic>.from(data);
-                      s.changed();
                       if (context.mounted) Navigator.pop(context);
+                      // Let the settings route finish closing before notifying
+                      // the app shell, which also rebuilds shop-name labels.
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        s.changed();
+                      });
                     } catch (e) {
                       if (mounted) setState(() => error = '$e');
                     } finally {

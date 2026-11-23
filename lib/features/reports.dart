@@ -205,7 +205,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     'التقرير غير متاح',
                     '${s.error}',
                     action: OutlinedButton(
-                      onPressed: () => setState(() => future = load()),
+                      onPressed: () => setState(() {
+                        future = load();
+                      }),
                       child: const Text('إعادة المحاولة'),
                     ),
                   );

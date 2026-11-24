@@ -492,15 +492,6 @@ class _CatalogScreenState extends State<CatalogScreen> {
               ),
             ],
           ),
-          if (supplier) ...[
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              key: const Key('supplier-catalog-return'),
-              onPressed: () => transact('Return'),
-              icon: const Icon(Icons.keyboard_return_outlined),
-              label: const Text('مرتجع بضاعة للمورد'),
-            ),
-          ],
         ],
       ],
     ),

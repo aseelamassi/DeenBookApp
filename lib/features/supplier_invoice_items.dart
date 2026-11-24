@@ -321,7 +321,7 @@ class _SupplierLineCardState extends State<_SupplierLineCard> {
             key: ValueKey('supplier-name-${widget.line.id}'),
             controller: _name,
             maxLength: 160,
-            decoration: inputDecoration('مثال: كرتونة رزيمان').copyWith(counterText: ''),
+            decoration: inputDecoration('مثال: كرتونة ازحيمان').copyWith(counterText: ''),
             validator: (value) => value == null || value.trim().isEmpty
                 ? 'أدخل اسم الصنف' : null,
             onChanged: (_) => _emit(),

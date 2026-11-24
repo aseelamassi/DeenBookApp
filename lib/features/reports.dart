@@ -570,6 +570,45 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (!mounted || printing || busy || error != null || overview == null) return;
     setState(() => printing = true);
     try {
+      // The report list deliberately includes voided entries for audit, so
+      // calculate the share totals from active entries rather than trusting
+      // the server overview for a query that includes them.
+      Json shareOverview;
+      if (selectedParty != null) {
+        final response = await accountHistory(selectedParty!, query);
+        shareOverview = Map<String, dynamic>.from(response['overview'] as Map);
+      } else {
+        final entries = <Json>[];
+        var pageNumber = 1;
+        var fetched = 0;
+        var totalEntries = 0;
+        while (true) {
+          final response = await session.api.get(
+            '/api/transactions',
+            query: {
+              ...query,
+              'includeVoided': true,
+              'page': pageNumber++,
+              'size': 100,
+            },
+          );
+          final pageEntries = (response['items'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+          fetched += pageEntries.length;
+          totalEntries = (response['total'] as num? ?? fetched).toInt();
+          entries.addAll(pageEntries.where((e) => e['voidedAt'] == null));
+          if (fetched >= totalEntries || pageEntries.isEmpty) break;
+        }
+        shareOverview = historyTotals(
+          entries,
+          supplier: partyKind == 'Supplier',
+        );
+      }
+      if (session.isOffline) {
+        message(context, 'انقطع الاتصال. أعد المحاولة قبل مشاركة الملخص.');
+        return;
+      }
       // The filtered movement totals describe the selected period, but the
       // party balance is always fetched fresh and describes today's balance.
       num? currentBalance;
@@ -596,9 +635,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
         shopName: session.shopName,
         partyKind: partyKind ?? 'Customer',
         periodLabel: Exports.rangeLabel(range),
-        overview: overview!,
         partyName: selectedParty?['name']?.toString(),
         kind: kind,
+        overview: shareOverview,
         currentBalance: currentBalance,
         groupOutstanding: groupOutstanding,
         pendingOnly: pendingOnly,

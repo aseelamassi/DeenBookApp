@@ -17,7 +17,14 @@ class Session extends ChangeNotifier {
     api.onForbidden = () {
       reload();
     };
-    api.onConnectionChanged = notifyListeners;
+    api.onConnectionChanged = () {
+      notifyListeners();
+      // A successful request can be the first sign that connectivity has
+      // returned. Start sending queued movements immediately in that case.
+      if (!api.isOffline && pendingSync > 0 && !syncing) {
+        unawaited(synchronize());
+      }
+    };
   }
   final Api api;
   Json? status, settings;
@@ -139,6 +146,9 @@ class Session extends ChangeNotifier {
     pendingSync = await api.pendingCount();
     revision++;
     notifyListeners();
+    if (pendingSync > 0 && !api.isOffline && !syncing) {
+      unawaited(synchronize());
+    }
   }
 
   Future<int> synchronize() async {

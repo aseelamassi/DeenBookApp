@@ -53,7 +53,7 @@ class Receipts {
     List<ShopCollectionAccount> collectionAccounts = const [],
   }) => draft(
     context,
-    '$shop\nكشف حساب ${s['party']['name']}\nرصيد بداية الفترة: ${money(s['openingBalance'])}\n${(s['entries'] as List).map((e) => '${dateTimeStamp(e['occurredAt'])} · ${kinds[e['kind']]} · ${money((e['amount'] as num) - (e['discount'] as num? ?? 0))}${e['pendingConfirmation'] == true ? ' (بانتظار التأكيد)' : ''}').join('\n')}\nرصيد نهاية الفترة: ${money(s['closingBalance'])}${s['party']['kind'] == 'Customer' && collectionAccounts.isNotEmpty ? '\n${collectionAccountLines(collectionAccounts).join('\n')}' : ''}',
+    '$shop\nكشف حساب ${s['party']['name']}\nرصيد بداية الفترة: ${money(s['openingBalance'])}\n${(s['entries'] as List).where((e) => e['voidedAt'] == null).map((e) => '${dateTimeStamp(e['occurredAt'])} · ${kinds[e['kind']]} · ${money((e['amount'] as num) - (e['discount'] as num? ?? 0))}${e['pendingConfirmation'] == true ? ' (بانتظار التأكيد)' : ''}').join('\n')}\nرصيد نهاية الفترة: ${money(s['closingBalance'])}${s['party']['kind'] == 'Customer' && collectionAccounts.isNotEmpty ? '\n${collectionAccountLines(collectionAccounts).join('\n')}' : ''}',
     '${s['party']['phone'] ?? ''}',
   );
   static Future<bool> confirmTransfer(BuildContext context, Json entry) async {

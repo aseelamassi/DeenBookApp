@@ -37,7 +37,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     _initialized = true;
     WidgetsBinding.instance.addObserver(this);
     // Keep retrying; successful requests are deduplicated by operationId.
-    _syncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+    // Connectivity can return while the app is idle. Retry often enough to
+    // start sync promptly without relying on an extra connectivity package.
+    _syncTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (!mounted) return;
       final session = Scope.of(context);
       if (session.pendingSync > 0 || session.isOffline) {

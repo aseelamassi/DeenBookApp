@@ -154,25 +154,57 @@ class BusyButton extends StatelessWidget {
 }
 
 class Remote extends StatefulWidget {
-  const Remote({super.key, required this.load, required this.builder});
+  const Remote({
+    super.key,
+    required this.load,
+    required this.builder,
+    this.revision = 0,
+  });
   final Future<Json> Function() load;
   final Widget Function(Json) builder;
+  final int revision;
   @override
   State<Remote> createState() => _RemoteState();
 }
 
 class _RemoteState extends State<Remote> {
   late Future<Json> future;
+  bool _loading = false;
   @override
   void initState() {
     super.initState();
-    future = widget.load();
+    future = _load();
+  }
+
+  @override
+  void didUpdateWidget(Remote oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.revision != widget.revision && !_loading) {
+      future = _load();
+    }
+  }
+
+  Future<Json> _load() async {
+    final revision = widget.revision;
+    _loading = true;
+    try {
+      return await widget.load();
+    } finally {
+      _loading = false;
+      if (mounted && revision != widget.revision) {
+        // Let FutureBuilder render this result before starting the next load.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_loading) setState(() => future = _load());
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<Json>(
     future: future,
     builder: (c, s) {
+      if (s.hasData) return widget.builder(s.data!);
       if (s.connectionState != ConnectionState.done) {
         return const Center(
           child: Padding(
@@ -188,7 +220,7 @@ class _RemoteState extends State<Remote> {
           icon: Icons.cloud_off_outlined,
           action: OutlinedButton(
             onPressed: () => setState(() {
-              future = widget.load();
+              future = _load();
             }),
             child: const Text('إعادة المحاولة'),
           ),

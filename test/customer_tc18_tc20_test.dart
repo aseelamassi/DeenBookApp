@@ -1,15 +1,82 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:deenbook/core/api.dart';
 import 'package:deenbook/core/session.dart';
 import 'package:deenbook/features/catalog.dart';
+import 'package:deenbook/main.dart';
 import 'package:deenbook/ui/credit_limit.dart';
 import 'package:deenbook/ui/theme.dart';
 import 'package:deenbook/ui/widgets.dart';
 import 'support/fakes.dart';
 
+class _SlowCustomerApi extends Api {
+  _SlowCustomerApi() : super(MemoryStorage());
+
+  final customerRequests = <Completer<Json>>[];
+
+  @override
+  bool get signedIn => true;
+
+  @override
+  Future<int> synchronize() async => 0;
+
+  @override
+  Future<Json> get(String path, {Json? query}) async {
+    switch (path) {
+      case '/api/customers':
+        final result = Completer<Json>();
+        customerRequests.add(result);
+        return result.future;
+      case '/api/dashboard':
+        return {'summary': <String, dynamic>{}};
+      case '/api/transactions':
+        return page([]);
+      case '/api/subscription':
+        return {'active': true, 'paidUntil': '2099-11-20T00:00:00Z'};
+      default:
+        throw StateError('Unexpected test request: $path');
+    }
+  }
+}
+
 void main() {
+  testWidgets('Periodic refresh lets slow customer requests finish', (tester) async {
+    tester.view.physicalSize = const Size(390, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = _SlowCustomerApi();
+    final requests = api.customerRequests;
+    final session = Session(api)
+      ..loading = false
+      ..status = await api.get('/api/subscription');
+    await tester.pumpWidget(DeenBookApp(session: session));
+    await tester.pump();
+    await tester.tap(find.text('الزبائن').last);
+    await tester.pump();
+    await tester.pump();
+    expect(requests, hasLength(1));
+
+    await tester.pump(const Duration(seconds: 15));
+    await tester.pump();
+    expect(requests, hasLength(1));
+    requests.first.complete(page([party()]));
+    await tester.pump();
+    await tester.pump();
+    expect(requests, hasLength(2));
+    expect(find.text('أحمد محمود'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    requests.last.complete(page([{...party(), 'name': 'زبون محدّث'}]));
+    await tester.pumpAndSettle();
+    expect(find.text('زبون محدّث'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   Widget wrap(Session session) => Scope(
     session: session,
     child: MaterialApp(

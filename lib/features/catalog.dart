@@ -20,9 +20,15 @@ import '../core/weight_pricing.dart';
 import 'transaction.dart';
 
 class CatalogScreen extends StatefulWidget {
-  const CatalogScreen({super.key, required this.mode, this.picker = false});
+  const CatalogScreen({
+    super.key,
+    required this.mode,
+    this.picker = false,
+    this.revision = 0,
+  });
   final String mode;
   final bool picker;
+  final int revision;
   @override
   State<CatalogScreen> createState() => _CatalogScreenState();
 }
@@ -59,6 +65,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
   Json? overview;
   int page = 0, total = 0, request = 0;
   bool busy = true, editProducts = false, showPriceNotice = true;
+  bool _loading = false, _refreshQueued = false;
   String? error, filter, category;
   String sort = 'balance';
   String get sortLabel =>
@@ -81,7 +88,20 @@ class _CatalogScreenState extends State<CatalogScreen> {
   void initState() {
     super.initState();
     _searchFocus.addListener(_onSearchFocusChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) => load());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(load());
+    });
+  }
+
+  @override
+  void didUpdateWidget(CatalogScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.revision == widget.revision) return;
+    if (_loading) {
+      _refreshQueued = true;
+    } else {
+      unawaited(load(background: true));
+    }
   }
 
   @override
@@ -93,18 +113,24 @@ class _CatalogScreenState extends State<CatalogScreen> {
     super.dispose();
   }
 
-  Future<void> load({bool more = false}) async {
+  Future<void> load({bool more = false, bool background = false}) async {
     final id = ++request;
-    setState(() {
-      busy = true;
-      error = null;
-      if (!more) {
-        rows = [];
-        page = 0;
-      }
-    });
+    final nextPage = more ? page + 1 : 1;
+    _loading = true;
+    _refreshQueued = false;
+    if (!background) {
+      setState(() {
+        busy = true;
+        error = null;
+        if (!more) {
+          rows = [];
+          page = 0;
+        }
+      });
+    }
     try {
-      final api = Scope.of(context).api;
+      final session = Scope.of(context);
+      final api = session.api;
       final data = await api.get(
         '/api/${widget.mode}',
         query: {
@@ -112,12 +138,13 @@ class _CatalogScreenState extends State<CatalogScreen> {
           'sort': sort,
           if (filter != null) 'filter': filter,
           if (category != null) 'category': category,
-          'page': page + 1,
+          'page': nextPage,
           'size': 30,
         },
       );
+      if (!mounted || id != request) return;
       Json? stats = overview;
-      if (modern && !more) {
+      if (session.ledgerV2 && !more) {
         stats = products
             ? {
                 'categories': (await api.get(
@@ -129,17 +156,24 @@ class _CatalogScreenState extends State<CatalogScreen> {
       if (!mounted || id != request) return;
       setState(() {
         rows = [
-          ...rows,
+          if (more) ...rows,
           ...(data['items'] as List).map((e) => Map<String, dynamic>.from(e)),
         ];
         total = data['total'];
-        page++;
+        page = nextPage;
         overview = stats;
+        error = null;
       });
     } catch (e) {
-      if (mounted && id == request) setState(() => error = '$e');
+      if (mounted && id == request && (!background || page == 0)) {
+        setState(() => error = '$e');
+      }
     } finally {
-      if (mounted && id == request) setState(() => busy = false);
+      if (mounted && id == request) {
+        _loading = false;
+        if (busy) setState(() => busy = false);
+        if (_refreshQueued) unawaited(load(background: true));
+      }
     }
   }
 

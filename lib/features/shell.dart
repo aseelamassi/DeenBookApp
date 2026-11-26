@@ -257,14 +257,13 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                   ),
                 ),
               Expanded(
-                child: KeyedSubtree(
-                  key: ValueKey('$tab:${session.revision}'),
-                  child: tab == 0
-                      ? HomeScreen(onCustomers: () => setState(() => tab = 1))
-                      : CatalogScreen(
-                          mode: ['', 'customers', 'suppliers', 'products'][tab],
-                        ),
-                ),
+                child: tab == 0
+                    ? HomeScreen(onCustomers: () => setState(() => tab = 1))
+                    : CatalogScreen(
+                        key: ValueKey(tab),
+                        mode: ['', 'customers', 'suppliers', 'products'][tab],
+                        revision: session.revision,
+                      ),
               ),
             ],
           ),
@@ -358,7 +357,7 @@ class HomeScreen extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
           children: [
             Remote(
-              key: ValueKey('home-dashboard-${session.revision}'),
+              revision: session.revision,
               load: () async {
                 final data = await session.api.get('/api/dashboard');
                 final recent = await session.api.get(

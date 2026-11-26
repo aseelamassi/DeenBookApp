@@ -1,0 +1,12 @@
+diff --git a/src/DeenBook.Api/Controllers/WorkersController.cs b/src/DeenBook.Api/Controllers/WorkersController.cs
+--- a/src/DeenBook.Api/Controllers/WorkersController.cs
++++ b/src/DeenBook.Api/Controllers/WorkersController.cs
+@@ -43,7 +43,7 @@
+         // SQL Server serializable locks prevent concurrent requests bypassing limit.
+         var count = await (from u in db.Users
+             join ur in db.UserRoles on u.Id equals ur.UserId
+-            where u.ShopId == shop && ur.RoleId == role.Id
++            where u.ShopId == shop && ur.RoleId == role.Id && u.Enabled
+             select u.Id).CountAsync(ct);
+         if (count >= 2) return Conflict(new { message = "يمكن إضافة عاملين اثنين فقط" });
+         var email = $"{Guid.NewGuid():N}@workers.deenbook.invalid";

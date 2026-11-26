@@ -1077,14 +1077,16 @@ class _WorkersScreenState extends State<WorkersScreen> {
   Future<void> renameWorker(Map entry) async {
     if (saving) return;
     final id = '${entry['id']}';
-    final controller = TextEditingController(text: '${entry['name'] ?? ''}');
+    final initialName = '${entry['name'] ?? ''}';
+    var draftName = initialName;
     try {
       final updatedName = await showDialog<String>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: const Text('تعديل اسم العامل'),
-          content: TextField(
-            controller: controller,
+          content: TextFormField(
+            initialValue: initialName,
+            onChanged: (value) => draftName = value,
             maxLength: 160,
             autofocus: true,
             decoration: const InputDecoration(labelText: 'اسم العامل'),
@@ -1093,7 +1095,7 @@ class _WorkersScreenState extends State<WorkersScreen> {
             TextButton(onPressed: () => Navigator.pop(dialogContext),
                 child: const Text('إلغاء')),
             TextButton(onPressed: () {
-              final value = controller.text.trim();
+              final value = draftName.trim();
               if (value.isNotEmpty) Navigator.pop(dialogContext, value);
             }, child: const Text('حفظ الاسم')),
           ],
@@ -1108,7 +1110,6 @@ class _WorkersScreenState extends State<WorkersScreen> {
     } catch (e) {
       if (mounted) message(context, '$e');
     } finally {
-      controller.dispose();
       if (mounted) setState(() => saving = false);
     }
   }

@@ -88,4 +88,53 @@ void main() {
     expect(find.textContaining('كلمة مرور العامل'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('Worker rename survives closing the focused dialog', (tester) async {
+    viewport(tester);
+    var workerName = 'سارة';
+    final savedNames = <String>[];
+    final session = (await tester.runAsync(() => fakeSession(override: (request) {
+      if (request.path == '/api/workers/worker-1/name') {
+        expect(request.method, 'PUT');
+        workerName = request.data['name'] as String;
+        savedNames.add(workerName);
+        return response({'name': workerName});
+      }
+      if (request.path == '/api/workers') {
+        return response({
+          'workers': [
+            {'id': 'worker-1', 'name': workerName, 'enabled': true},
+          ],
+        });
+      }
+      return null;
+    })))!;
+    await tester.pumpWidget(Scope(
+      session: session,
+      child: const MaterialApp(home: WorkersScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    final dialogField = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextField),
+    );
+    await tester.tap(find.text('تعديل الاسم'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(dialogField).controller!.text, 'سارة');
+    await tester.enterText(dialogField, 'اسم ملغى');
+    await tester.tap(find.text('إلغاء'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(savedNames, isEmpty);
+
+    await tester.tap(find.text('تعديل الاسم'));
+    await tester.pumpAndSettle();
+    await tester.enterText(dialogField, '  سارة أحمد  ');
+    await tester.tap(find.text('حفظ الاسم'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(savedNames, ['سارة أحمد']);
+    expect(find.text('سارة أحمد'), findsOneWidget);
+  });
 }

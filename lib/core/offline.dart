@@ -185,6 +185,71 @@ class OfflineVault {
     return null;
   }
 
+  String _workerDeletesKey(String shopId, String ownerId) =>
+      'outbox.workerDeletes.$shopId.$ownerId';
+
+  Future<List<Map<String, dynamic>>> readWorkerDeletes(
+    String shopId, String? ownerId,
+  ) async {
+    if (shopId.isEmpty || ownerId == null || ownerId.isEmpty) return [];
+    final raw = await storage.read(_workerDeletesKey(shopId, ownerId));
+    if (raw == null) return [];
+    return (jsonDecode(raw) as List)
+        .map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<void> queueWorkerDelete(String shopId, String ownerId,
+      String workerId, String workerName) => _locked(() async {
+    if (shopId.isEmpty || ownerId.isEmpty || workerId.isEmpty) {
+      throw StateError('معرّف المحل أو المالك أو العامل غير متاح');
+    }
+    final records = await readWorkerDeletes(shopId, ownerId);
+    if (records.any((e) => e['workerId'] == workerId)) return;
+    records.add({
+      'kind': 'WorkerDelete',
+      'workerId': workerId,
+      'workerName': workerName,
+      'savedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    await storage.write(_workerDeletesKey(shopId, ownerId), jsonEncode(records));
+  });
+
+  Future<void> recordWorkerDeleteError(String shopId, String ownerId,
+      String workerId, String message) => _locked(() async {
+    final records = await readWorkerDeletes(shopId, ownerId);
+    for (final record in records) {
+      if (record['workerId'] == workerId) record['lastError'] = message;
+    }
+    await storage.write(_workerDeletesKey(shopId, ownerId), jsonEncode(records));
+  });
+
+  Future<void> cancelWorkerDelete(String shopId, String ownerId,
+      String workerId) => _locked(() async {
+    final records = await readWorkerDeletes(shopId, ownerId);
+    records.removeWhere((e) => e['workerId'] == workerId);
+    await storage.write(_workerDeletesKey(shopId, ownerId), jsonEncode(records));
+  });
+
+  Future<void> saveWorkerSnapshot(String shopId, dynamic response) =>
+      _locked(() => saveSnapshot(shopId, '/api/workers', null, response));
+
+  Future<void> confirmWorkerDelete(String shopId, String ownerId,
+      String workerId) => _locked(() async {
+    // Update the durable base snapshot BEFORE removing the pending operation.
+    // A restart without internet must not resurrect a confirmed deletion.
+    final snapshot = await readSnapshot(shopId, '/api/workers', null);
+    if (snapshot is Map && snapshot['workers'] is List) {
+      await saveSnapshot(shopId, '/api/workers', null, {
+        ...snapshot,
+        'workers': (snapshot['workers'] as List)
+            .where((w) => w is! Map || '${w['id']}' != workerId).toList(),
+      });
+    }
+    final records = await readWorkerDeletes(shopId, ownerId);
+    records.removeWhere((e) => e['workerId'] == workerId);
+    await storage.write(_workerDeletesKey(shopId, ownerId), jsonEncode(records));
+  });
+
   String _outboxKey(String shopId) => 'outbox.$shopId';
 
   Future<List<Map<String, dynamic>>> readOutbox(String shopId) async {

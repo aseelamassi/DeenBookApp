@@ -214,8 +214,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                         Expanded(
                           child: Text(
                             session.isOffline
-                                ? 'وضع دون إنترنت: الحركات الجديدة ظاهرة محليًا. ${session.pendingSync} حركة تنتظر المزامنة.'
-                                : '${session.pendingSync} حركة محفوظة بانتظار المزامنة.',
+                                ? 'وضع دون إنترنت: الحركات الجديدة ظاهرة محليًا. ${session.pendingSync} عملية تنتظر المزامنة.'
+                                : '${session.pendingSync} عملية محفوظة بانتظار المزامنة.',
                             style: const TextStyle(fontSize: 12),
                           ),
                         ),

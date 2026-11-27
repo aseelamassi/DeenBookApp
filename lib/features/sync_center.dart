@@ -16,17 +16,41 @@ class SyncCenterScreen extends StatefulWidget {
 
 class _SyncCenterScreenState extends State<SyncCenterScreen> {
   Future<List<Json>>? future;
+  Session? _session;
+  int _revision = -1;
 
   Future<List<Json>> load() async {
     final session = Scope.of(context);
     final api = session.api;
-    return api.offlineVault.readOutbox(api.savedShopId);
+    return [
+      ...await api.offlineVault.readOutbox(api.savedShopId),
+      ...await api.pendingWorkerDeletes(),
+    ];
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final session = Scope.of(context);
+    if (session != _session) {
+      _session?.removeListener(_onSessionChanged);
+      _session = session;
+      _revision = session.revision;
+      session.addListener(_onSessionChanged);
+    }
     future ??= load();
+  }
+
+  void _onSessionChanged() {
+    if (!mounted || _session == null || _revision == _session!.revision) return;
+    _revision = _session!.revision;
+    setState(() { future = load(); });
+  }
+
+  @override
+  void dispose() {
+    _session?.removeListener(_onSessionChanged);
+    super.dispose();
   }
 
   Future<void> synchronize() async {
@@ -40,8 +64,10 @@ class _SyncCenterScreenState extends State<SyncCenterScreen> {
       context,
       session.syncError ??
           (sent > 0
-              ? 'تم إرسال $sent حركة وتأكيد حفظها'
-              : 'لا توجد حركات جديدة للمزامنة'),
+              ? 'تمت مزامنة $sent عملية'
+              : session.pendingSync > 0
+                  ? 'توجد عمليات ما زالت بانتظار المزامنة'
+                  : 'لا توجد عمليات جديدة للمزامنة'),
     );
   }
 
@@ -54,9 +80,9 @@ class _SyncCenterScreenState extends State<SyncCenterScreen> {
         child: ListView(
           padding: const EdgeInsets.all(18),
           children: [
-            const Heading('الحركات المحفوظة على الجهاز'),
+            const Heading('العمليات المحفوظة على الجهاز'),
             const Text(
-              'هذه الحركات محفوظة على الجهاز وتظهر في سجل الحساب والرصيد المحلي، لكنها لم تُؤكّد على الخادم بعد. لا تدخل في التقارير السحابية حتى تكتمل المزامنة.',
+              'تظهر الحركات المالية المعلقة في السجل المحلي فقط حتى تأكيد الخادم. طلبات حذف العاملين لا تصبح نافذة على الأجهزة الأخرى إلا بعد المزامنة.',
             ),
             const SizedBox(height: 16),
             BusyButton(
@@ -81,15 +107,27 @@ class _SyncCenterScreenState extends State<SyncCenterScreen> {
                 final records = snapshot.data!;
                 if (records.isEmpty) {
                   return const Empty(
-                    'كل الحركات متزامنة',
-                    'لا توجد حركات محفوظة على الجهاز بانتظار الإرسال.',
+                    'كل العمليات متزامنة',
+                    'لا توجد عمليات محفوظة على الجهاز بانتظار الإرسال.',
                     icon: Icons.cloud_done_outlined,
                   );
                 }
                 return Column(
                   children: [
                     for (final record in records)
-                      Surface(
+                      if (record['kind'] == 'WorkerDelete')
+                        Surface(child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text('حذف عامل: ${record['workerName'] ?? ''}',
+                                style: Theme.of(context).textTheme.titleMedium),
+                            Text('تاريخ التسجيل: ${day(record['savedAt'])}'),
+                            const Text('الحالة: بانتظار تأكيد الخادم'),
+                            if (record['lastError'] != null)
+                              Text('${record['lastError']}', style: const TextStyle(color: Colors.red)),
+                          ],
+                        ))
+                      else Surface(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [

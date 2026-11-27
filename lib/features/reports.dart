@@ -105,7 +105,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 }
                 await Exports.report(
                   session.shopName, data, range,
-                  pendingLocal: session.pendingSync,
+                  pendingLocal: session.pendingFinancialSync,
                   collectionAccounts: collectionAccountsFromSettings(session.settings),
                 );
               } catch (e) {
@@ -174,7 +174,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               icon: const Icon(Icons.date_range),
               label: Text('${day(range.start)} — ${day(range.end)}'),
             ),
-            if (session.pendingSync > 0 || session.isOffline)
+            if (session.pendingFinancialSync > 0 || session.isOffline)
               Surface(
                 color: const Color(0xFFFFF1DF),
                 child: Column(
@@ -187,7 +187,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     Text(
                       session.isOffline
                           ? 'هذه أرقام آخر نسخة تم تنزيلها من الخادم، وقد لا تطابق الوضع الحالي.'
-                          : 'هناك ${session.pendingSync} حركة على الجهاز لم تُسجّل على الخادم بعد.',
+                          : 'هناك ${session.pendingFinancialSync} حركة على الجهاز لم تُسجّل على الخادم بعد.',
                     ),
                     Text(
                       session.isOffline
@@ -483,7 +483,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final session = Scope.of(context);
     if (!await ReportExportGuard.confirmServerOnly(context, session)) return;
     if (!mounted || printing || busy || error != null) return;
-    final pendingLocal = session.pendingSync;
+    final pendingLocal = session.pendingFinancialSync;
     final params = query;
     final exportParty = selectedParty;
     final selectedRange = range;
@@ -641,7 +641,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         currentBalance: currentBalance,
         groupOutstanding: groupOutstanding,
         pendingOnly: pendingOnly,
-        pendingLocal: session.pendingSync,
+        pendingLocal: session.pendingFinancialSync,
         collectionAccounts: collectionAccountsFromSettings(session.settings),
       );
       await Receipts.draft(context, draft, '');
@@ -974,13 +974,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
               ),
               const SizedBox(height: 14),
             ],
-            if (session.isOffline || session.pendingSync > 0)
+            if (session.isOffline || session.pendingFinancialSync > 0)
               Surface(
                 color: paleOrange,
                 child: Text(
                   session.isOffline
                       ? 'لا يمكن تجهيز تصدير كامل دون اتصال بالخادم. اتصل بالإنترنت ثم أعد تحميل التقرير.'
-                      : ReportExportGuard.pendingNotice(session.pendingSync),
+                      : ReportExportGuard.pendingNotice(session.pendingFinancialSync),
                 ),
               ),
             Row(

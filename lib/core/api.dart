@@ -127,6 +127,9 @@ class Api {
   final Dio dio;
   late final OfflineVault offlineVault = OfflineVault(storage);
   String? _shopId;
+  String? _verifiedOwnerId;
+  Future<int>? _synchronizing;
+  int _workerCacheVersion = 0;
   bool _offlineMode = false;
   bool get isOffline => _offlineMode;
   VoidCallback? onConnectionChanged;
@@ -146,10 +149,14 @@ class Api {
     if (id is! String || id.isEmpty) return;
     _shopId = id;
     if (!_offlineMode) {
+      final userId = data['userId'];
+      _verifiedOwnerId = data['isOwner'] == true && userId is String && userId.isNotEmpty
+          ? userId : null;
       await storage.write(
         'offline.identity',
         jsonEncode({
           'shopId': id,
+          'ownerId': _verifiedOwnerId,
           'verifiedAt': DateTime.now().toUtc().toIso8601String(),
         }),
       );
@@ -189,6 +196,10 @@ class Api {
         return false;
       }
       _shopId = id;
+      final ownerId = identity['ownerId'];
+      _verifiedOwnerId = ownerId is String && ownerId.isNotEmpty &&
+          status['isOwner'] == true && status['userId'] == ownerId
+          ? ownerId : null;
       _setOffline(true);
       return true;
     } catch (_) {
@@ -196,13 +207,69 @@ class Api {
     }
   }
 
+  Future<List<Json>> pendingWorkerDeletes() =>
+      offlineVault.readWorkerDeletes(savedShopId, _verifiedOwnerId);
+
   Future<int> pendingCount() async =>
-      (await offlineVault.readOutbox(savedShopId)).length;
+      (await offlineVault.readOutbox(savedShopId)).length +
+      (await pendingWorkerDeletes()).length;
+
+  /// Only a server-verified owner may enqueue a deletion. The immutable
+  /// worker ID, not the reusable phone number, is the retry key.
+  Future<Json> deleteWorker(String workerId, String workerName) async {
+    final shop = _shopId;
+    final owner = _verifiedOwnerId;
+    final generation = _generation;
+    if (shop == null || owner == null || !signedIn || workerId.isEmpty ||
+        workerId.contains('/')) {
+      throw ApiFailure('اتصل بالإنترنت بحساب صاحب المحل للتحقق من الصلاحية.');
+    }
+    await offlineVault.queueWorkerDelete(shop, owner, workerId, workerName);
+    if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
+    if (isOffline || _access == null) return {'queued': true};
+    try {
+      await _sendWorkerDelete(shop, owner, workerId, generation);
+      return {'queued': false};
+    } on ApiFailure catch (e) {
+      if (generation != _generation) rethrow;
+      if (e.status == null || e.status! >= 500 || e.status == 409 || e.status == 429) {
+        if (e.status == null || e.status! >= 500) _setOffline(true);
+        await offlineVault.recordWorkerDeleteError(shop, owner, workerId, e.message);
+        return {'queued': true};
+      }
+      // A definitive rejection of a NEW online action is not a deletion.
+      // Previously queued deletes are handled by synchronize and retained.
+      await offlineVault.cancelWorkerDelete(shop, owner, workerId);
+      rethrow;
+    }
+  }
+
+  Future<void> _sendWorkerDelete(String shop, String owner,
+      String workerId, int generation) async {
+    if (_generation != generation || _shopId != shop || _verifiedOwnerId != owner) {
+      throw ApiFailure('تغيّرت جلسة الدخول.');
+    }
+    await request('DELETE', '/api/workers/${Uri.encodeComponent(workerId)}');
+    // Even if the user switches accounts immediately after the HTTP response,
+    // acknowledgement belongs only to the original owner's durable queue.
+    _workerCacheVersion++;
+    await offlineVault.confirmWorkerDelete(shop, owner, workerId);
+  }
 
   Future<dynamic> _withLocalMovements(
     String path, Json? query, dynamic raw,
   ) async {
     if (_shopId == null || raw is! Map) return raw;
+    if (path == '/api/workers') {
+      final pending = await pendingWorkerDeletes();
+      final ids = pending.map((e) => '${e['workerId']}').toSet();
+      return <String, dynamic>{
+        ...Map<String, dynamic>.from(raw),
+        'workers': ((raw['workers'] as List?) ?? [])
+            .where((w) => w is Map && !ids.contains('${w['id']}')).toList(),
+        'pendingWorkerDeletes': pending,
+      };
+    }
     final outbox = await offlineVault.readOutbox(_shopId!);
     if (outbox.isEmpty) {
       if (path == '/api/transactions' && raw['offlinePartial'] == true) {
@@ -386,6 +453,7 @@ class Api {
   Future<void> warmOfflineCatalog() async {
     if (_shopId == null || _access == null || isOffline) return;
     final tasks = <Future<dynamic>>[
+      if (_verifiedOwnerId != null) get('/api/workers'),
       get('/api/dashboard'),
       get('/api/customers/overview'),
       get('/api/suppliers/overview'),
@@ -401,12 +469,44 @@ class Api {
 
   /// Returns the number of successfully synchronized operations. Failed
   /// operations are retained, never silently dropped or assigned new IDs.
-  Future<int> synchronize() async {
-    if (_shopId == null) return 0;
+  Future<int> synchronize() =>
+      _synchronizing ??= _synchronize().whenComplete(() => _synchronizing = null);
+
+  Future<int> _synchronize() async {
+    final shop = _shopId;
+    final owner = _verifiedOwnerId;
+    final generation = _generation;
+    if (shop == null) return 0;
     if (_access == null) await refresh();
-    if (_access == null) throw ApiFailure('الاتصال بالخادم غير متاح للمزامنة.');
+    if (_access == null || generation != _generation || _shopId != shop) {
+      throw ApiFailure('الاتصال بالخادم غير متاح للمزامنة.');
+    }
     var completed = 0;
-    final entries = await offlineVault.readOutbox(_shopId!);
+    final entries = await offlineVault.readOutbox(shop);
+    final workerDeletes = await offlineVault.readWorkerDeletes(shop, owner);
+    ApiFailure? workerFailure;
+    if (owner != null) {
+      for (final entry in workerDeletes) {
+        final workerId = '${entry['workerId']}';
+        try {
+          await _sendWorkerDelete(shop, owner, workerId, generation);
+          completed++;
+        } on ApiFailure catch (e) {
+          if (generation != _generation) rethrow;
+          await offlineVault.recordWorkerDeleteError(shop, owner, workerId, e.message);
+          workerFailure = e;
+          if (e.status == null || e.status! >= 500) {
+            _setOffline(true);
+            throw e;
+          }
+          // Keep the request for review/retry. Never claim the server deleted it.
+          if (e.status == 401 || e.status == 403) throw e;
+        }
+      }
+    }
+    if (generation != _generation || _shopId != shop) {
+      throw ApiFailure('تغيّرت جلسة الدخول.');
+    }
     // A disconnected app with an empty outbox must still detect that internet
     // returned. GET requests normally prefer cache while _offlineMode is true.
     if (_offlineMode &&
@@ -420,13 +520,26 @@ class Api {
             sendTimeout: const Duration(seconds: 5),
           ),
         );
+        if (generation != _generation || _shopId != shop) {
+          throw ApiFailure('تغيّرت جلسة الدخول.');
+        }
         _setOffline(false);
-        await offlineVault.saveSnapshot(_shopId!, '/api/subscription', null, response.data);
-      } on DioException {
-        // No data is deleted; subsequent periodic retries use the same state.
+        await offlineVault.saveSnapshot(shop, '/api/subscription', null, response.data);
+      } on DioException catch (e) {
+        // A deleted worker may have no pending transactions. Do not keep a
+        // revoked identity in offline mode after a server authentication error.
+        if (generation == _generation && e.response?.statusCode == 401) {
+          await refresh();
+        } else if (generation == _generation && e.response?.statusCode == 403) {
+          await clear();
+          throw ApiFailure.from(e);
+        }
       }
     }
     for (final entry in entries) {
+      if (generation != _generation || _shopId != shop) {
+        throw ApiFailure('تغيّرت جلسة الدخول.');
+      }
       if (entry['blocked'] == true) continue;
       final body = Map<String, dynamic>.from(entry['body'] as Map);
       try {
@@ -438,6 +551,7 @@ class Api {
         rethrow;
       }
     }
+    if (workerFailure != null) throw workerFailure;
     return completed;
   }
 
@@ -518,6 +632,7 @@ class Api {
       final generation = ++_generation;
       await _accept(tokens, generation);
       _shopId = null;
+      _verifiedOwnerId = null;
       _setOffline(false);
       // A new identity must not inherit a previous account's offline snapshots.
       await storage.delete('offline.identity');
@@ -591,7 +706,11 @@ class Api {
   }) async {
     final generation = _generation;
     final original = _access;
+    final workerCacheVersion = _workerCacheVersion;
     final readable = method == 'GET';
+    if (readable && path == '/api/workers' && _offlineMode && _verifiedOwnerId == null) {
+      throw ApiFailure('اتصل بالإنترنت بحساب صاحب المحل لتحميل العاملين.');
+    }
     final queuedTransaction =
         method == 'POST' &&
         path == '/api/transactions' &&
@@ -608,6 +727,7 @@ class Api {
 
     Future<dynamic> snapshotOrThrow(ApiFailure error) async {
       if (readable && _shopId != null &&
+          (path != '/api/workers' || _verifiedOwnerId != null) &&
           (error.status == null || error.status! >= 500)) {
         var saved = await offlineVault.readBestSnapshot(_shopId!, path, query);
         if (saved == null && path == '/api/transactions') {
@@ -678,9 +798,20 @@ class Api {
       if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
       _setOffline(false);
       if (readable && _shopId != null) {
-        await _reconcileConfirmed(path, result.data);
-        await offlineVault.saveSnapshot(_shopId!, path, query, result.data);
-        await offlineVault.indexResponse(_shopId!, path, query, result.data);
+        if (path == '/api/workers') {
+          // A GET started before a successful DELETE must not overwrite its
+          // updated offline snapshot with a stale worker list.
+          if (workerCacheVersion == _workerCacheVersion) {
+            await offlineVault.saveWorkerSnapshot(_shopId!, result.data);
+          } else {
+            final saved = await offlineVault.readSnapshot(_shopId!, path, null);
+            if (saved != null) return _withLocalMovements(path, query, saved);
+          }
+        } else {
+          await _reconcileConfirmed(path, result.data);
+          await offlineVault.saveSnapshot(_shopId!, path, query, result.data);
+          await offlineVault.indexResponse(_shopId!, path, query, result.data);
+        }
       }
       if (queuedTransaction) {
         await offlineVault.removeTransaction(
@@ -776,6 +907,7 @@ class Api {
     _refresh = null;
     _refreshExpiry = null;
     _shopId = null;
+    _verifiedOwnerId = null;
     _setOffline(false);
     await storage.delete('offline.identity');
     onSignedOut?.call();

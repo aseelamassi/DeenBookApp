@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
+import 'dart:async';
 import 'package:image_picker/image_picker.dart';
 
 import '../core/format.dart';
@@ -1028,6 +1029,11 @@ class WorkersScreen extends StatefulWidget {
 
 class _WorkersScreenState extends State<WorkersScreen> {
   List<dynamic> workers = [];
+  List<dynamic> pendingDeletes = [];
+  Session? _session;
+  int _seenRevision = -1;
+  int _loadGeneration = 0;
+  Timer? _setupSyncTimer;
   bool loading = true, saving = false;
   String? error;
   final name = TextEditingController();
@@ -1035,25 +1041,71 @@ class _WorkersScreenState extends State<WorkersScreen> {
   final password = TextEditingController();
   bool initialized = false;
   @override
-  void didChangeDependencies() { super.didChangeDependencies(); if (!initialized) { initialized = true; load(); } }
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final session = Scope.of(context);
+    if (_session != session) {
+      _session?.removeListener(_onSessionChanged);
+      _session = session;
+      _seenRevision = session.revision;
+      session.addListener(_onSessionChanged);
+    }
+    if (!initialized) {
+      initialized = true;
+      load();
+      // During initial setup there is no AppShell timer yet.
+      if (session.workerSetup) {
+        _setupSyncTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+          if (mounted && (session.pendingSync > 0 || session.isOffline)) {
+            unawaited(session.synchronize());
+          }
+        });
+      }
+    }
+  }
+  void _onSessionChanged() {
+    if (!mounted || _session == null || _seenRevision == _session!.revision) return;
+    _seenRevision = _session!.revision;
+    if (!saving) load();
+  }
   @override
-  void dispose() { name.dispose(); phone.dispose(); password.dispose(); super.dispose(); }
+  void dispose() {
+    _session?.removeListener(_onSessionChanged);
+    _setupSyncTimer?.cancel();
+    name.dispose(); phone.dispose(); password.dispose(); super.dispose();
+  }
   Future<void> load() async {
+    final generation = ++_loadGeneration;
+    final api = Scope.of(context).api;
     try {
-      final result = await Scope.of(context).api.get('/api/workers');
-      if (mounted) setState(() {
+      final result = await api.get('/api/workers');
+      if (mounted && generation == _loadGeneration) setState(() {
         // Disabled accounts are treated as deleted in the owner interface and
         // do not occupy one of the two active worker slots.
         workers = ((result['workers'] as List?) ?? [])
             .where((entry) => entry is Map && entry['enabled'] == true)
             .toList();
+        pendingDeletes = (result['pendingWorkerDeletes'] as List?) ?? [];
         loading = false;
         error = null;
       });
-    } catch (e) { if (mounted) setState(() { loading = false; error = '$e'; }); }
+    } catch (e) {
+      final pending = await api.pendingWorkerDeletes();
+      if (mounted && generation == _loadGeneration) setState(() {
+        pendingDeletes = pending;
+        final ids = pending.map((entry) => '${entry['workerId']}').toSet();
+        workers.removeWhere((entry) => ids.contains('${entry['id']}'));
+        loading = false; error = '$e';
+      });
+    }
   }
   Future<void> add() async {
     if (saving || workers.length >= 2) return;
+    final session = Scope.of(context);
+    if (session.isOffline) {
+      message(context, 'إضافة عامل جديد تحتاج إلى اتصال بالإنترنت.');
+      return;
+    }
     final normalized = phoneNumber(phone.text);
     if (name.text.trim().isEmpty || name.text.trim().length > 160 ||
         normalized == null || password.text.length < 12) {
@@ -1062,12 +1114,21 @@ class _WorkersScreenState extends State<WorkersScreen> {
     }
     setState(() => saving = true);
     try {
-      await Scope.of(context).api.request('POST', '/api/workers',
-        body: {
-          'name': name.text.trim(),
-          'phoneNumber': normalized,
-          'password': password.text,
-        });
+      if ((await session.api.pendingWorkerDeletes()).isNotEmpty) {
+        await session.synchronize();
+        if (!mounted) return;
+        await load();
+        if (!mounted) return;
+        if ((await session.api.pendingWorkerDeletes()).isNotEmpty) {
+          if (mounted) message(context, 'زامن حذف العامل أولاً قبل إضافة عامل جديد.');
+          return;
+        }
+      }
+      if (!mounted || workers.length >= 2) return;
+      await session.api.request('POST', '/api/workers', body: {
+        'name': name.text.trim(), 'phoneNumber': normalized, 'password': password.text,
+      });
+      if (!mounted) return;
       name.clear(); phone.clear(); password.clear();
       await load();
       if (mounted) message(context, 'تمت إضافة العامل بنجاح');
@@ -1121,7 +1182,7 @@ class _WorkersScreenState extends State<WorkersScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('حذف العامل'),
         content: Text(
-          'هل تريد حذف حساب ${workerDisplayName(entry)}؟ بعد الحذف يمكن إضافة عامل جديد مكانه.',
+          'هل تريد حذف حساب ${workerDisplayName(entry)}؟ إذا لم يتوفر اتصال، سيُحفظ الطلب محلياً ويُنفّذ على الخادم عند المزامنة. تبقى الحركات السابقة محفوظة.',
         ),
         actions: [
           TextButton(
@@ -1139,9 +1200,20 @@ class _WorkersScreenState extends State<WorkersScreen> {
     if (confirmed != true || !mounted) return;
     setState(() => saving = true);
     try {
-      await Scope.of(context).api.request('DELETE', '/api/workers/$id');
+      final session = Scope.of(context);
+      final result = await session.api.deleteWorker(id, workerDisplayName(entry));
+      final pending = await session.api.pendingWorkerDeletes();
+      _loadGeneration++;
+      if (mounted) setState(() {
+        workers.removeWhere((w) => '${w['id']}' == id);
+        pendingDeletes = pending;
+      });
+      await session.updatePending();
+      if (!mounted) return;
       await load();
-      if (mounted) message(context, 'تم حذف العامل، ويمكنك إضافة عامل جديد الآن');
+      if (mounted) message(context, result['queued'] == true
+          ? 'تم حفظ طلب حذف العامل محلياً، وسيُنفّذ عند المزامنة.'
+          : 'تم حذف العامل، ويمكنك إضافة عامل جديد الآن');
     } catch (e) { if (mounted) message(context, '$e'); }
     finally { if (mounted) setState(() => saving = false); }
   }
@@ -1161,6 +1233,23 @@ class _WorkersScreenState extends State<WorkersScreen> {
         const SizedBox(height: 14),
         if (loading) const Center(child: CircularProgressIndicator()),
         if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
+        if (pendingDeletes.isNotEmpty) Surface(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('${pendingDeletes.length} طلب حذف عامل بانتظار تأكيد الخادم',
+                style: const TextStyle(color: orange)),
+            for (final entry in pendingDeletes)
+              Text('${entry['workerName'] ?? 'عامل'}${entry['lastError'] == null ? '' : ' — ${entry['lastError']}'}'),
+            OutlinedButton.icon(
+              onPressed: saving || s.syncing ? null : () async {
+                await s.synchronize();
+                if (mounted) await load();
+              },
+              icon: const Icon(Icons.sync),
+              label: const Text('مزامنة الآن'),
+            ),
+          ],
+        )),
         for (final entry in workers)
           Surface(child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1747,7 +1836,7 @@ class _BackupScreenState extends State<BackupScreen> {
                       Expanded(
                         child: Text(
                           session.pendingSync > 0
-                              ? '${session.pendingSync} حركة لم تُزامَن بعد'
+                              ? '${session.pendingSync} عملية لم تُزامَن بعد'
                               : 'لا توجد حركات معلّقة للمزامنة',
                           style: appText(14, weight: FontWeight.w800),
                         ),

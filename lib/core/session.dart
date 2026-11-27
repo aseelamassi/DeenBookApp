@@ -11,6 +11,7 @@ class Session extends ChangeNotifier {
       ledgerV2 = false;
       error = null;
       pendingSync = 0;
+      pendingWorkerSync = 0;
       workerSetup = false;
       notifyListeners();
     };
@@ -35,6 +36,13 @@ class Session extends ChangeNotifier {
   String? startupError;
   int revision = 0;
   int pendingSync = 0;
+  int pendingWorkerSync = 0;
+  int get pendingFinancialSync => pendingSync >= pendingWorkerSync
+      ? pendingSync - pendingWorkerSync : 0;
+  Future<void> _refreshPending() async {
+    pendingWorkerSync = (await api.pendingWorkerDeletes()).length;
+    pendingSync = (await api.offlineVault.readOutbox(api.savedShopId)).length + pendingWorkerSync;
+  }
   bool syncing = false;
   String? syncError;
   bool get isOffline => api.isOffline;
@@ -111,7 +119,7 @@ class Session extends ChangeNotifier {
       if (api.signedIn) {
         status = await api.get('/api/subscription');
         await api.rememberStatus(status!);
-        pendingSync = await api.pendingCount();
+        await _refreshPending();
         ledgerV2 = (await api.storage.read('ledgerV2.$shopId')) == 'true';
         if (active) {
           settings = await api.get('/api/settings');
@@ -143,7 +151,7 @@ class Session extends ChangeNotifier {
   }
 
   Future<void> updatePending() async {
-    pendingSync = await api.pendingCount();
+    await _refreshPending();
     revision++;
     notifyListeners();
     if (pendingSync > 0 && !api.isOffline && !syncing) {
@@ -158,7 +166,7 @@ class Session extends ChangeNotifier {
     notifyListeners();
     try {
       final synced = await api.synchronize();
-      pendingSync = await api.pendingCount();
+      await _refreshPending();
       if (!api.isOffline) {
         try {
           status = await api.get('/api/subscription');
@@ -174,7 +182,8 @@ class Session extends ChangeNotifier {
       return synced;
     } catch (e) {
       syncError = '$e';
-      pendingSync = await api.pendingCount();
+      await _refreshPending();
+      revision++;
       return 0;
     } finally {
       syncing = false;

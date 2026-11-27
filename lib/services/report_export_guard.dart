@@ -31,11 +31,11 @@ class ReportExportGuard {
       );
       return false;
     }
-    if (session.pendingSync == 0) return true;
+    if (session.pendingFinancialSync == 0) return true;
     return confirm(
       context,
       'تصدير بيانات الخادم فقط',
-      '${pendingNotice(session.pendingSync)}\n\n'
+      '${pendingNotice(session.pendingFinancialSync)}\n\n'
       'يمكنك المتابعة بطباعة أو مشاركة الحركات المتزامنة فقط، '
       'أو الإلغاء ومزامنة الحركات أولاً.',
     );

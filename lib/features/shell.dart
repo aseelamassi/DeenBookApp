@@ -42,7 +42,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     _syncTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (!mounted) return;
       final session = Scope.of(context);
-      if (session.pendingSync > 0 || session.isOffline) {
+      if (session.pendingSync > 0 || session.isOffline ||
+          (session.api.grace.elapsed ?? Duration.zero) >= const Duration(hours: 1)) {
         session.synchronize();
       } else {
         // Refresh remote changes from other workers' devices on the open tab.

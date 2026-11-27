@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'storage.dart';
+import 'offline_projection.dart';
 
 /// Encrypted local snapshots and a durable, shop-scoped transaction outbox.
 /// The Storage implementation uses Android/iOS secure storage; this is NOT
@@ -77,15 +78,9 @@ class OfflineVault {
           .whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
       // Retain previously downloaded pages, never replace an entire catalog
       // because a search returned one matching record.
-      for (final value in values) {
-        final index = records.indexWhere((r) => '${r['id']}' == '${value['id']}');
-        if (index < 0) {
-          records.add(value);
-        } else {
-          records[index] = value;
-        }
-      }
-      await storage.write(key, jsonEncode(records));
+      final byId = {for (final record in records) '${record['id']}': record};
+      for (final value in values) { byId['${value['id']}'] = value; }
+      await storage.write(key, jsonEncode(byId.values.toList()));
     });
   }
 
@@ -96,6 +91,22 @@ class OfflineVault {
     return (jsonDecode(raw) as List)
         .map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
+
+  Future<void> confirmCatalog(String shopId, String collection, String id, dynamic response, {bool deleted = false}) => _locked(() async {
+    final rows = await indexedItems(shopId, collection);
+    final matching = rows.where((r) => '${r['id']}' == id);
+    final old = matching.isEmpty ? null : matching.first;
+    rows.removeWhere((r) => '${r['id']}' == id);
+    if (!deleted && response is Map) rows.add({...?old, ...Map<String,dynamic>.from(response)});
+    await storage.write(_collectionKey(shopId, collection), jsonEncode(rows));
+    await storage.write('catalog.changed.$shopId.$collection', '1');
+    if (['/api/customers','/api/suppliers'].contains(collection) && !deleted && response is Map) {
+      await saveSnapshot(shopId, '/api/parties/$id', null, response);
+    }
+  });
+
+  Future<bool> catalogChanged(String shopId, String collection) async =>
+      await storage.read('catalog.changed.$shopId.$collection') != null;
 
   Future<Map<String, dynamic>?> findParty(String shopId, String id) async {
     for (final path in ['/api/customers', '/api/suppliers']) {
@@ -122,16 +133,18 @@ class OfflineVault {
     String shopId, String path, Map<String, dynamic>? query,
   ) async {
     final exact = await readSnapshot(shopId, path, query);
-    if (exact != null) return exact;
+    final changed = _indexed(path) && await catalogChanged(shopId,path);
+    final changedLedger = path.endsWith('/statement') && await catalogChanged(shopId,'/api/transactions');
+    if (exact != null && path != '/api/transactions' && !changed && !changedLedger) return exact;
     if (_indexed(path)) {
       final records = await indexedItems(shopId, path);
-      if (records.isEmpty) return null;
+      if (records.isEmpty && !changed) return exact;
       final term = '${query?['search'] ?? ''}'.toLowerCase().trim();
       var matches = records.where((r) => term.isEmpty ||
           ['name', 'nickname', 'phone', 'sku'].any((k) =>
             '${r[k] ?? ''}'.toLowerCase().contains(term))).toList();
       final filter = '${query?['filter'] ?? ''}';
-      if (filter == 'debt') matches = matches.where((r) => (r['balance'] as num? ?? 0) > 0).toList();
+      if (filter == 'debt' || filter == 'owing') matches = matches.where((r) => (r['balance'] as num? ?? 0) > 0).toList();
       if (filter == 'credit') matches = matches.where((r) => (r['balance'] as num? ?? 0) < 0).toList();
       if (filter == 'settled') matches = matches.where((r) => (r['balance'] as num? ?? 0) == 0).toList();
       if (filter == 'creditLimit' && path == '/api/customers') {
@@ -139,6 +152,13 @@ class OfflineVault {
           final limit = (r['creditLimit'] as num?) ?? 0;
           return limit > 0 && (r['balance'] as num? ?? 0) >= limit * .8;
         }).toList();
+      }
+      if (filter == 'scheduled') matches = matches.where((r) => '${r[path == '/api/suppliers' ? 'deliveryDays' : 'paymentSchedule'] ?? ''}'.isNotEmpty).toList();
+      if (filter == 'today' && path == '/api/suppliers') {
+        const ar = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد'];
+        const en = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+        final day = DateTime.now().weekday - 1;
+        matches = matches.where((r) => '${r['deliveryDays'] ?? ''}'.contains(ar[day]) || '${r['deliveryDays'] ?? ''}'.contains(en[day])).toList();
       }
       if (query?['category'] != null) {
         matches = matches.where((r) => '${r['category'] ?? ''}' == '${query!['category']}').toList();
@@ -152,22 +172,21 @@ class OfflineVault {
           matches = matches.where((r) => ids.contains('${r['partyId']}')).toList();
         }
         matches = matches.where((r) {
+          if (query?['includeVoided'] != true && r['voidedAt'] != null) return false;
           if (query?['kind'] != null && r['kind'] != query!['kind']) return false;
           if (query?['partyId'] != null && r['partyId'] != query!['partyId']) return false;
           if (query?['pending'] != null && (r['pendingConfirmation'] == true) != query!['pending']) return false;
-          final from = DateTime.tryParse('${query?['from'] ?? ''}');
-          final to = DateTime.tryParse('${query?['to'] ?? ''}');
-          final occured = DateTime.tryParse('${r['occurredAt'] ?? ''}')?.toLocal();
-          if (occured != null && from != null && occured.isBefore(DateTime(from.year,from.month,from.day))) return false;
-          if (occured != null && to != null && !occured.isBefore(DateTime(to.year,to.month,to.day+1))) return false;
-          return true;
+          return OfflineProjection.isInsideDate(r,query);
         }).toList();
       }
       if (query?['sort'] == 'name') matches.sort((a,b) => '${a['name'] ?? ''}'.compareTo('${b['name'] ?? ''}'));
       if (query?['sort'] == 'balance') matches.sort((a,b) => (b['balance'] as num? ?? 0).compareTo(a['balance'] as num? ?? 0));
+      if (query?['sort'] == 'balanceAsc') matches.sort((a,b) => (a['balance'] as num? ?? 0).compareTo(b['balance'] as num? ?? 0));
+      if (query?['sort'] == 'recent') matches.sort((a,b) => '${b['lastActivity'] ?? ''}'.compareTo('${a['lastActivity'] ?? ''}'));
       // Return the full cached index for transaction lists. The projection
       // layer applies paging after inserting the locally pending movements.
       if (path == '/api/transactions') {
+        matches.sort((a,b) { final c='${b['occurredAt']}'.compareTo('${a['occurredAt']}'); return c!=0?c:'${b['id']}'.compareTo('${a['id']}'); });
         return {'items': matches, 'total': matches.length, 'offlinePartial': true};
       }
       final page = (query?['page'] as num?)?.toInt() ?? 1;
@@ -178,12 +197,60 @@ class OfflineVault {
         'offlinePartial': true,
       };
     }
+    if (path.startsWith('/api/parties/') && path.endsWith('/statement') && changedLedger) {
+      final id=path.split('/')[3];
+      final party=await findParty(shopId,id);
+      if(party!=null) {
+        final rows=(await indexedItems(shopId,'/api/transactions')).where((e)=>e['partyId']==id && OfflineProjection.isInsideDate(e,query)).toList()..sort((a,b)=>'${a['occurredAt']}'.compareTo('${b['occurredAt']}'));
+        return {'party':party,'entries':rows,'openingBalance':query?['from']==null?party['openingBalance']:null,'closingBalance':query?['to']==null?party['balance']:null,'offlinePartial':true};
+      }
+    }
     if (path.startsWith('/api/parties/') && !path.endsWith('/statement')) {
       final id = path.split('/').last;
       return findParty(shopId, id);
     }
     return null;
   }
+
+  String _workerRenamesKey(String shopId, String ownerId) => 'outbox.workerRenames.$shopId.$ownerId';
+
+  Future<List<Map<String, dynamic>>> readWorkerRenames(String shopId, String? ownerId) async {
+    if (shopId.isEmpty || ownerId == null || ownerId.isEmpty) return [];
+    final raw = await storage.read(_workerRenamesKey(shopId, ownerId));
+    return raw == null ? [] : (jsonDecode(raw) as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+  Future<void> queueWorkerRename(String shopId, String ownerId, String id, String expected, String name) => _locked(() async {
+    final records = await readWorkerRenames(shopId, ownerId);
+    // Preserve the original expected name for repeated offline edits. A new
+    // intent supersedes the previous local draft, not other device changes.
+    final matches = records.where((e) => e['workerId'] == id);
+    final existing = matches.isEmpty ? null : matches.first;
+    records.removeWhere((e) => e['workerId'] == id);
+    records.add({'kind': 'WorkerRename', 'workerId': id, 'expectedName': existing?['expectedName'] ?? expected,
+      'workerName': name, 'savedAt': DateTime.now().toUtc().toIso8601String()});
+    await storage.write(_workerRenamesKey(shopId, ownerId), jsonEncode(records));
+  });
+  Future<void> recordWorkerRenameError(String shopId, String ownerId, String id, String name, String error) => _locked(() async {
+    final records = await readWorkerRenames(shopId, ownerId);
+    for (final e in records) { if (e['workerId'] == id && e['workerName'] == name) e['lastError'] = error; }
+    await storage.write(_workerRenamesKey(shopId, ownerId), jsonEncode(records));
+  });
+  Future<void> confirmWorkerRename(String shopId, String ownerId, String id, String name, {bool discard = false}) => _locked(() async {
+    final records = await readWorkerRenames(shopId, ownerId);
+    if (!discard) {
+      final snapshot = await readSnapshot(shopId, '/api/workers', null);
+      if (snapshot is Map && snapshot['workers'] is List) {
+        await saveSnapshot(shopId, '/api/workers', null, {...snapshot,
+          'workers': (snapshot['workers'] as List).map((w) => w is Map && '${w['id']}' == id ? {...w, 'name': name} : w).toList()});
+      }
+    }
+    // An edit that happened while this request was in flight is still pending.
+    for (final e in records) {
+      if (!discard && e['workerId'] == id && e['workerName'] != name) e['expectedName'] = name;
+    }
+    records.removeWhere((e) => e['workerId'] == id && (discard || e['workerName'] == name));
+    await storage.write(_workerRenamesKey(shopId, ownerId), jsonEncode(records));
+  });
 
   String _workerDeletesKey(String shopId, String ownerId) =>
       'outbox.workerDeletes.$shopId.$ownerId';
@@ -261,7 +328,7 @@ class OfflineVault {
         .toList();
   }
 
-  Future<void> addTransaction(String shopId, Map<String, dynamic> body) =>
+  Future<void> addTransaction(String shopId, Map<String, dynamic> body, {String? userId}) =>
       _locked(() async {
         if (shopId.isEmpty || '${body['operationId'] ?? ''}'.isEmpty) {
           throw StateError('لا يمكن حفظ حركة دون محل ومعرّف عملية');
@@ -270,13 +337,14 @@ class OfflineVault {
         final id = '${body['operationId']}';
         final existing = records.where((e) => e['operationId'] == id);
         if (existing.isNotEmpty) {
-          if (jsonEncode(existing.first['body']) != jsonEncode(body)) {
+          if (existing.first['userId'] != userId || jsonEncode(existing.first['body']) != jsonEncode(body)) {
             throw StateError('معرّف العملية مرتبط بمحتوى مختلف');
           }
           return;
         }
         records.add({
           'operationId': id,
+          'userId': userId,
           'savedAt': DateTime.now().toUtc().toIso8601String(),
           'body': body,
         });

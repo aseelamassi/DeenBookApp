@@ -40,8 +40,9 @@ class Session extends ChangeNotifier {
   int get pendingFinancialSync => pendingSync >= pendingWorkerSync
       ? pendingSync - pendingWorkerSync : 0;
   Future<void> _refreshPending() async {
-    pendingWorkerSync = (await api.pendingWorkerDeletes()).length;
-    pendingSync = (await api.offlineVault.readOutbox(api.savedShopId)).length + pendingWorkerSync;
+    final catalog = await api.pendingCatalog();
+    pendingWorkerSync = (await api.pendingWorkerDeletes()).length + (await api.pendingWorkerRenames()).length + catalog.where((r)=>r['collection']!='/api/transactions').length;
+    pendingSync = (await api.currentOutbox()).length + pendingWorkerSync + catalog.where((r)=>r['collection']=='/api/transactions').length;
   }
   bool syncing = false;
   String? syncError;
@@ -118,10 +119,9 @@ class Session extends ChangeNotifier {
     try {
       if (api.signedIn) {
         status = await api.get('/api/subscription');
-        await api.rememberStatus(status!);
         await _refreshPending();
         ledgerV2 = (await api.storage.read('ledgerV2.$shopId')) == 'true';
-        if (active) {
+        if (active && !api.offlineExpired) {
           settings = await api.get('/api/settings');
           if (!api.isOffline) unawaited(api.warmOfflineCatalog());
           try {
@@ -150,6 +150,19 @@ class Session extends ChangeNotifier {
     }
   }
 
+  int? _lastGraceStage;
+  bool? _lastGraceExpired;
+  Future<void> checkOfflineGrace() async {
+    try { await api.observeOfflineClock(); } catch (_) { /* No financial data is changed. */ }
+    final day = api.grace.reminderDay;
+    final expired = api.offlineExpired;
+    if (day != _lastGraceStage || expired != _lastGraceExpired) {
+      _lastGraceStage = day;
+      _lastGraceExpired = expired;
+      notifyListeners();
+    }
+  }
+
   Future<void> updatePending() async {
     await _refreshPending();
     revision++;
@@ -167,20 +180,16 @@ class Session extends ChangeNotifier {
     try {
       final synced = await api.synchronize();
       await _refreshPending();
-      if (!api.isOffline) {
-        try {
-          status = await api.get('/api/subscription');
-          await api.rememberStatus(status!);
-        } catch (_) {
-          // A successful write remains confirmed even if the follow-up status
-          // check fails. The next retry can refresh subscription state.
-        }
+      if (api.lastVerifiedStatus != null) status = api.lastVerifiedStatus;
+      if (!api.isOffline && active) {
+        settings = await api.get('/api/settings');
       }
       // Refresh local projections even if the server rejected an operation;
       // its blocked/review state is now different.
       revision++;
       return synced;
     } catch (e) {
+      if (api.lastVerifiedStatus != null) status = api.lastVerifiedStatus;
       syncError = '$e';
       await _refreshPending();
       revision++;
@@ -192,6 +201,7 @@ class Session extends ChangeNotifier {
   }
 
   void changed() {
+    unawaited(updatePending());
     revision++;
     notifyListeners();
   }

@@ -1215,7 +1215,9 @@ class _SupplierDetailState extends State<SupplierDetail> {
     if (reason == null || !mounted) return;
     try {
       final session = Scope.of(context);
-      await session.api.request('POST', '/api/transactions/${entry['id']}/void', body: {'reason': reason});
+      final result = await session.api.request('POST', '/api/transactions/${entry['id']}/void', body: {'reason': reason});
+      await session.updatePending();
+      if (mounted && result is Map && result['queued']==true) message(context,'حُفظ طلب الشطب بانتظار اعتماد الخادم.');
       session.changed();
       if (mounted) refresh();
     } catch (error) {
@@ -1789,6 +1791,7 @@ class _PartyDetailState extends State<PartyDetail> {
                                       await session.api.request('POST',
                                           '/api/transactions/${e['id']}/void',
                                           body: {'reason': reason});
+                                      await session.updatePending();
                                       session.changed();
                                       if (mounted) refresh();
                                     } catch (error) {

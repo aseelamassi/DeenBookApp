@@ -150,7 +150,7 @@ class Exports {
     ],
     ['التاريخ والوقت', 'الحركة', 'الصافي', 'دفع فوري', 'الرصيد بعدها', 'الوصف'],
     runningStatement(s)
-        .where((e) => e['voidedAt'] == null)
+        .where((e) => e['voidedAt'] == null && e['offlinePending'] != true)
         .map(
           (e) => [
             dateTimeStamp(e['occurredAt']),
@@ -185,6 +185,7 @@ class Exports {
     String? kind, {
     String? selectionLabel,
     int pendingLocal = 0,
+    bool offlineCopy = false,
     List<ShopCollectionAccount> collectionAccounts = const [],
     bool customerReport = true,
   }) async {
@@ -196,11 +197,12 @@ class Exports {
         if (customerReport) ...collectionAccountLines(collectionAccounts),
         kind == null ? 'كل الحركات' : kinds[kind]!,
         if (selectionLabel?.isNotEmpty == true) selectionLabel!,
+        if (offlineCopy) 'نسخة محلية غير مكتملة — قد تكون البيانات قديمة',
         if (pendingLocal > 0) ReportExportGuard.pendingNotice(pendingLocal),
       ],
       ['التاريخ والوقت', 'الحساب', 'الحركة', 'المبلغ', 'الوصف'],
       rows
-          .where((e) => e['voidedAt'] == null)
+          .where((e) => e['voidedAt'] == null && e['offlinePending'] != true)
           .map(
             (e) => [
               dateTimeStamp(e['occurredAt']),
@@ -223,6 +225,7 @@ class Exports {
     Json data,
     DateTimeRange range, {
     int pendingLocal = 0,
+    bool offlineCopy = false,
     List<ShopCollectionAccount> collectionAccounts = const [],
   }) async {
     final s = data['summary'], c = data['cash'];
@@ -232,6 +235,7 @@ class Exports {
       [
         rangeLabel(range),
         ...collectionAccountLines(collectionAccounts),
+        if (offlineCopy) 'نسخة محلية غير مكتملة — قد تكون البيانات قديمة',
         if (pendingLocal > 0) ReportExportGuard.pendingNotice(pendingLocal),
       ],
       ['البيان', 'القيمة'],
@@ -277,18 +281,20 @@ class Exports {
     List<Json> rows,
     Map<String, String> names, {
     int pendingLocal = 0,
+    bool offlineCopy = false,
     List<ShopCollectionAccount> collectionAccounts = const [],
     bool customerReport = true,
   }) =>
       '\uFEFF${[
         ['التاريخ والوقت', 'الحساب', 'الحركة', 'المبلغ بعد الخصم', 'حالة الحوالة', 'الوصف'].map(csvCell).join(','),
+        if (offlineCopy) ['تنبيه - ليس حركة','نسخة محلية غير مكتملة — قد تكون البيانات قديمة','','','',''].map(csvCell).join(','),
         if (pendingLocal > 0)
           [
             'تنبيه - ليس حركة',
             ReportExportGuard.pendingNotice(pendingLocal),
             '', '', '', '',
           ].map(csvCell).join(','),
-        ...rows.where((e) => e['voidedAt'] == null).map((e) => [csvCell(dateTimeStamp(e['occurredAt'])), csvCell(names[e['partyId']] ?? ''), csvCell(kinds[e['kind']] ?? 'حركة'), decimalMoney(amountCents(e['amount']) - amountCents(e['discount'])), csvCell(e['pendingConfirmation'] == true ? 'بانتظار التأكيد — غير محتسبة' : 'مسجّلة'), csvCell(entryDescription(e))].join(',')),
+        ...rows.where((e) => e['voidedAt'] == null && e['offlinePending'] != true).map((e) => [csvCell(dateTimeStamp(e['occurredAt'])), csvCell(names[e['partyId']] ?? ''), csvCell(kinds[e['kind']] ?? 'حركة'), decimalMoney(amountCents(e['amount']) - amountCents(e['discount'])), csvCell(e['pendingConfirmation'] == true ? 'بانتظار التأكيد — غير محتسبة' : 'مسجّلة'), csvCell(entryDescription(e))].join(',')),
         if (customerReport && collectionAccounts.isNotEmpty) ...[
           List.filled(6, '').map(csvCell).join(','),
           ['معلومات التحويل إلى المحل', '', '', '', '', ''].map(csvCell).join(','),
@@ -301,6 +307,7 @@ class Exports {
     List<Json> rows,
     Map<String, String> names, {
     int pendingLocal = 0,
+    bool offlineCopy = false,
     List<ShopCollectionAccount> collectionAccounts = const [],
     bool customerReport = true,
   }) async {
@@ -310,7 +317,7 @@ class Exports {
         files: [
           XFile.fromData(
             Uint8List.fromList(utf8.encode(historyCsvText(
-                rows, names, pendingLocal: pendingLocal,
+                rows, names, pendingLocal: pendingLocal, offlineCopy:offlineCopy,
                 collectionAccounts: collectionAccounts,
                 customerReport: customerReport,
               ))),

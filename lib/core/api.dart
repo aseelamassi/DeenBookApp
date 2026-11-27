@@ -6,7 +6,10 @@ import 'package:flutter/foundation.dart';
 
 import 'storage.dart';
 import 'offline.dart';
+import 'offline_catalog.dart';
 import 'offline_projection.dart';
+import 'offline_grace.dart';
+import 'sync_reminders.dart';
 
 typedef Json = Map<String, dynamic>;
 const defaultApiBaseUrl = 'https://api-deenbook.runasp.net';
@@ -126,8 +129,65 @@ class Api {
   final Storage storage;
   final Dio dio;
   late final OfflineVault offlineVault = OfflineVault(storage);
+  late final OfflineCatalog offlineCatalog = OfflineCatalog(storage);
+  int _catalogCacheVersion = 0;
   String? _shopId;
   String? _verifiedOwnerId;
+  String? _verifiedUserId;
+  DateTime? _verifiedAt;
+  DateTime? _maxObservedAt;
+  DateTime? _monotonicBase;
+  final Stopwatch _graceWatch = Stopwatch();
+  bool _clockUntrusted = false;
+  DateTime _effectiveNow() {
+    final wall = DateTime.now().toUtc();
+    final running = _monotonicBase?.add(_graceWatch.elapsed);
+    if (running != null && running.isAfter(wall)) return running;
+    return wall;
+  }
+  void _startGraceClock(DateTime base) {
+    _monotonicBase = base;
+    _graceWatch..reset()..start();
+  }
+  Future<void> observeOfflineClock() async {
+    final verified = _verifiedAt;
+    if (verified == null) return;
+    final now = DateTime.now().toUtc();
+    final previous = _maxObservedAt;
+    if (previous != null && now.isBefore(previous.subtract(const Duration(minutes: 2)))) {
+      _clockUntrusted = true;
+    }
+    final effective = _effectiveNow();
+    if (previous != null && !_clockUntrusted && effective.difference(previous) < const Duration(minutes: 2)) return;
+    _maxObservedAt = previous == null || effective.isAfter(previous) ? effective : previous;
+    final generation = _generation;
+    final observed = _maxObservedAt!;
+    final locked = _clockUntrusted;
+    await _write(() async {
+      if (generation != _generation || _verifiedAt != verified) return;
+      await storage.write('offline.clock', jsonEncode({
+        'verifiedAt': verified.toIso8601String(),
+        'observedAt': observed.toIso8601String(),
+        'untrusted': locked,
+      }));
+    });
+  }
+  DateTime? get verifiedAt => _verifiedAt;
+  Json? lastVerifiedStatus;
+  String? get verifiedUserId => _verifiedUserId;
+  int get offlineGraceDays => OfflineGrace.parseDays(lastVerifiedStatus?['offlineGraceDays']);
+  OfflineGrace get grace => OfflineGrace(_verifiedAt, _effectiveNow(),
+      days: offlineGraceDays,
+      paidUntil: _offlineMode ? DateTime.tryParse('${lastVerifiedStatus?['paidUntil'] ?? ''}') : null,
+      clockUntrusted: _clockUntrusted || (_maxObservedAt != null &&
+        DateTime.now().toUtc().isBefore(_maxObservedAt!.subtract(const Duration(minutes: 2)))));
+  bool get offlineExpired => _verifiedAt != null && grace.expired;
+  bool _warming = false;
+  void _requireOfflineAccess() {
+    if (offlineExpired || (_offlineMode && _verifiedAt == null)) {
+      throw ApiFailure('انتهت مدة العمل دون إنترنت. اتصل بالخادم للتحقق والمزامنة.', status: 423);
+    }
+  }
   Future<int>? _synchronizing;
   int _workerCacheVersion = 0;
   bool _offlineMode = false;
@@ -144,12 +204,23 @@ class Api {
     onConnectionChanged?.call();
   }
 
-  Future<void> rememberStatus(Json data) async {
+  Future<void> _rememberLiveStatus(Json data) async {
     final id = data['id'];
     if (id is! String || id.isEmpty) return;
+    if (_shopId != null && _shopId != id) throw ApiFailure('تغيّر المحل. سجّل الدخول مجدداً.');
     _shopId = id;
-    if (!_offlineMode) {
+    {
       final userId = data['userId'];
+      final nextUser = userId is String && userId.isNotEmpty ? userId : null;
+      if (_verifiedUserId != null && _verifiedUserId != nextUser) {
+        throw ApiFailure('تغيّرت هوية الحساب. سجّل الدخول مجدداً.');
+      }
+      _verifiedUserId = nextUser;
+      _verifiedAt = DateTime.now().toUtc();
+      _clockUntrusted = false;
+      _maxObservedAt = null;
+      _startGraceClock(_verifiedAt!);
+      lastVerifiedStatus = Map<String, dynamic>.from(data);
       _verifiedOwnerId = data['isOwner'] == true && userId is String && userId.isNotEmpty
           ? userId : null;
       await storage.write(
@@ -157,10 +228,15 @@ class Api {
         jsonEncode({
           'shopId': id,
           'ownerId': _verifiedOwnerId,
-          'verifiedAt': DateTime.now().toUtc().toIso8601String(),
+          'userId': _verifiedUserId,
+          'verifiedAt': _verifiedAt!.toIso8601String(),
         }),
       );
       await offlineVault.saveSnapshot(id, '/api/subscription', null, data);
+      await observeOfflineClock();
+      if (data['active'] == true && data['suspended'] != true) {
+        await SyncReminders.schedule(_verifiedAt!, days: offlineGraceDays, expiresAt: OfflineGrace(_verifiedAt, _effectiveNow(), days: offlineGraceDays, paidUntil: DateTime.tryParse('${lastVerifiedStatus?['paidUntil'] ?? ''}')).expiresAt);
+      } else { await SyncReminders.cancel(); }
     }
   }
 
@@ -173,12 +249,7 @@ class Api {
       final verified = DateTime.tryParse('${identity['verifiedAt']}');
       if (id is! String ||
           id.isEmpty ||
-          verified == null ||
-          DateTime.now().toUtc().difference(verified.toUtc()) >
-              const Duration(days: 7) ||
-          DateTime.now().toUtc().isBefore(
-            verified.toUtc().subtract(const Duration(minutes: 5)),
-          )) {
+          verified == null) {
         return false;
       }
       final status = await offlineVault.readSnapshot(
@@ -196,11 +267,31 @@ class Api {
         return false;
       }
       _shopId = id;
+      lastVerifiedStatus = Map<String, dynamic>.from(status);
+      _verifiedAt = verified.toUtc();
+      _clockUntrusted = false;
+      _maxObservedAt = _verifiedAt;
+      final clockRaw = await storage.read('offline.clock');
+      if (clockRaw != null) {
+        try {
+          final savedClock = jsonDecode(clockRaw) as Map;
+          if (savedClock['verifiedAt'] == _verifiedAt!.toIso8601String()) {
+            _maxObservedAt = DateTime.tryParse('${savedClock['observedAt']}')?.toUtc() ?? _verifiedAt;
+            _clockUntrusted = savedClock['untrusted'] == true;
+          }
+        } catch (_) { _clockUntrusted = true; }
+      }
+      final wall = DateTime.now().toUtc();
+      _startGraceClock(_maxObservedAt!.isAfter(wall) ? _maxObservedAt! : wall);
+      await observeOfflineClock();
+      final userId = identity['userId'] ?? status['userId'];
+      _verifiedUserId = userId is String && userId.isNotEmpty && status['userId'] == userId ? userId : null;
       final ownerId = identity['ownerId'];
       _verifiedOwnerId = ownerId is String && ownerId.isNotEmpty &&
           status['isOwner'] == true && status['userId'] == ownerId
           ? ownerId : null;
       _setOffline(true);
+      if (!offlineExpired) await SyncReminders.schedule(_verifiedAt!, days: offlineGraceDays, expiresAt: OfflineGrace(_verifiedAt, _effectiveNow(), days: offlineGraceDays, paidUntil: DateTime.tryParse('${lastVerifiedStatus?['paidUntil'] ?? ''}')).expiresAt);
       return true;
     } catch (_) {
       return false;
@@ -210,9 +301,137 @@ class Api {
   Future<List<Json>> pendingWorkerDeletes() =>
       offlineVault.readWorkerDeletes(savedShopId, _verifiedOwnerId);
 
+  Future<List<Json>> currentOutbox() async => (await offlineVault.readOutbox(savedShopId))
+      .where((entry) => _verifiedUserId != null && entry['userId'] == _verifiedUserId).toList();
+
+  Future<int> legacyPendingCount() async => (await offlineVault.readOutbox(savedShopId))
+      .where((entry) => entry['userId'] == null).length;
+
+  Future<List<Json>> pendingWorkerRenames() => offlineVault.readWorkerRenames(savedShopId, _verifiedOwnerId);
+
+  Future<Json> renameWorker(String id, String expected, String name) async {
+    final shop = _shopId;
+    final owner = _verifiedOwnerId;
+    final generation = _generation;
+    if (shop == null || owner == null || !signedIn || id.isEmpty || id.contains('/') || name.trim().isEmpty || name.length > 160) {
+      throw ApiFailure('تعذّر التحقق من بيانات العامل وصلاحيات صاحب المحل.');
+    }
+    _requireOfflineAccess();
+    // Only queue if the deployed API advertises conflict-aware rename support.
+    if (lastVerifiedStatus?['offlineWorkerRenameVersion'] != 1) {
+      return _responseObject(await request('PUT', '/api/workers/$id/name', body: {'name': name}));
+    }
+    await offlineVault.queueWorkerRename(shop, owner, id, expected, name);
+    if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
+    // A single sync loop performs all administrative writes; never race it.
+    return {'queued': true};
+  }
+  Future<void> discardWorkerRename(String id) async {
+    final shop = _shopId; final owner = _verifiedOwnerId;
+    if (shop == null || owner == null) throw ApiFailure('صاحب المحل فقط');
+    if (_synchronizing != null) throw ApiFailure('انتظر انتهاء المزامنة أولاً.');
+    await offlineVault.confirmWorkerRename(shop, owner, id, '', discard: true);
+  }
+
+  Future<List<Json>> pendingCatalog() => offlineCatalog.pending(savedShopId, _verifiedUserId);
+
+  Future<List<Json>> _catalogItems(String collection) async => OfflineCatalog.overlay(
+      collection, await offlineVault.indexedItems(savedShopId, collection), await pendingCatalog());
+
+  Future<Json?> _catalogParty(String id) async {
+    for (final collection in ['/api/customers','/api/suppliers']) {
+      for (final row in await _catalogItems(collection)) {
+        if ('${row['id']}' == id) return {...row, 'kind':collection == '/api/customers' ? 'Customer' : 'Supplier'};
+      }
+    }
+    return null;
+  }
+
+  Future<dynamic> _queueCatalog(String method, String path, Object? body) async {
+    final user = _verifiedUserId;
+    final shop = _shopId;
+    if (user == null || shop == null) throw ApiFailure('تحقق من الحساب أولاً');
+    final generation = _generation;
+    final data = body is Map ? Map<String,dynamic>.from(body) : <String,dynamic>{};
+    if ((path == '/api/workers' || path.endsWith('/void')) && _verifiedOwnerId != user) throw ApiFailure('هذه العملية متاحة للمالك فقط.');
+    if (path == '/api/workers') {
+      final cached = await offlineVault.readSnapshot(shop,path,null);
+      if (cached is! Map) throw ApiFailure('حمّل قائمة العاملين أولاً.');
+      final projected = (await _withLocalMovements(path,null,cached)) as Map;
+      final active = (projected['workers'] as List).where((w)=>w is Map && w['enabled']==true).toList();
+      if (active.length >= 2) throw ApiFailure('يمكن إضافة عاملين اثنين فقط.');
+      if (active.any((w)=>w['phoneNumber']==data['phoneNumber'])) throw ApiFailure('رقم الجوال مستخدم.');
+    }
+    if (path.startsWith('/api/transactions/')) {
+      final id = path.split('/')[3];
+      final rows = await offlineVault.indexedItems(shop, '/api/transactions');
+      final matches = rows.where((r) => '${r['id']}' == id);
+      if (matches.isEmpty || matches.first['voidedAt'] != null) throw ApiFailure('حمّل الحركة من الخادم أولاً.');
+      if (path.endsWith('/confirm') && matches.first['pendingConfirmation'] != true) throw ApiFailure('الحوالة ليست بانتظار التأكيد.');
+    }
+    if (method=='PATCH' && _verifiedOwnerId!=user) throw ApiFailure('تعديل سقف الدين للمالك فقط.');
+    Json? expected;
+    if (path == '/api/settings') {
+      if (_verifiedOwnerId != user) throw ApiFailure('تعديل إعدادات المحل متاح للمالك فقط.');
+      final cached = await offlineVault.readSnapshot(shop,path,null);
+      if (cached is! Map) throw ApiFailure('حمّل إعدادات المحل أولاً.');
+      expected = Map<String,dynamic>.from(cached);
+      for(final record in await pendingCatalog()) {
+        if(record['collection']==path) expected = OfflineCatalog.project(record,expected);
+      }
+      expected = {for(final f in ['name','ownerName','phone','collectionAccounts']) f:expected![f]};
+    } else if (method != 'POST') {
+      final id = path.split('/')[3];
+      if (path.startsWith('/api/products')) {
+        for (final row in await _catalogItems('/api/products')) { if ('${row['id']}' == id) expected = row; }
+      } else {
+        expected = await _catalogParty(id);
+        if (expected == null) {
+          final cached = await offlineVault.readSnapshot(shop, '/api/parties/$id', null);
+          if (cached is Map) expected = Map<String,dynamic>.from(cached);
+        }
+      }
+      if (expected == null) throw ApiFailure('حمّل بيانات السجل أولاً.');
+      if ((await pendingCatalog()).any((r)=>r['entityId']==id && r['lastError']!=null)) throw ApiFailure('راجع التعديل المرفوض في مركز المزامنة أولاً.');
+      // Send only editable fields; defaults are explicit for older cached rows.
+      expected = path.startsWith('/api/products') ? {
+        for (final f in ['name','unit','category','salePrice','purchasePrice','pricingMode']) f:expected![f],
+      } : {
+        'kind':expected['kind'],
+        for (final f in ['name','nickname','phone','alternatePhone','alternateContact','representative','category','deliveryDays','acceptedMethods','paymentSchedule']) f:expected![f] ?? '',
+        'openingBalance':expected['openingBalance'] ?? 0, 'creditLimit':expected['creditLimit'],
+      };
+    }
+    if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
+    final record = await offlineCatalog.enqueue(shop,user,method,path,data,expected);
+    if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
+    if (path == '/api/workers' || path.startsWith('/api/transactions/')) return {'queued':true, 'id':record['entityId']};
+    return {...OfflineCatalog.project(record,expected), 'queued':true};
+  }
+
+  Future<void> discardRejectedCatalog(String operationId) async {
+    if (_synchronizing != null) throw ApiFailure('انتظر انتهاء المزامنة.');
+    final actor = _verifiedUserId, shop = _shopId;
+    if (actor == null || shop == null) throw ApiFailure('تحقق من الحساب أولاً.');
+    final records = await pendingCatalog();
+    final matches = records.where((r)=>r['operationId']==operationId);
+    if (matches.isEmpty || matches.first['lastError']==null) throw ApiFailure('يمكن إلغاء الطلب المرفوض فقط.');
+    final row = matches.first, entity = '${matches.first['entityId']}';
+    if (records.any((r)=>r['entityId']==entity && r['operationId']!=operationId && '${r['savedAt']}'.compareTo('${row['savedAt']}')>=0)) {
+      throw ApiFailure('توجد تعديلات لاحقة تعتمد على هذا الطلب. تواصل مع الدعم.');
+    }
+    for(final tx in await currentOutbox()) {
+      final body = tx['body'] as Map;
+      if ('${body['partyId']}'==entity || ((body['items'] as List?) ?? []).whereType<Map>().any((i)=>'${i['productId']}'==entity)) {
+        throw ApiFailure('توجد حركة مالية مرتبطة بالطلب؛ لا يمكن إلغاؤه تلقائياً.');
+      }
+    }
+    await offlineCatalog.acknowledge(shop,actor,operationId);
+  }
+
   Future<int> pendingCount() async =>
-      (await offlineVault.readOutbox(savedShopId)).length +
-      (await pendingWorkerDeletes()).length;
+      (await currentOutbox()).length +
+      (await pendingWorkerDeletes()).length + (await pendingWorkerRenames()).length + (await pendingCatalog()).length;
 
   /// Only a server-verified owner may enqueue a deletion. The immutable
   /// worker ID, not the reusable phone number, is the retry key.
@@ -224,6 +443,7 @@ class Api {
         workerId.contains('/')) {
       throw ApiFailure('اتصل بالإنترنت بحساب صاحب المحل للتحقق من الصلاحية.');
     }
+    _requireOfflineAccess();
     await offlineVault.queueWorkerDelete(shop, owner, workerId, workerName);
     if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
     if (isOffline || _access == null) return {'queued': true};
@@ -249,11 +469,33 @@ class Api {
     if (_generation != generation || _shopId != shop || _verifiedOwnerId != owner) {
       throw ApiFailure('تغيّرت جلسة الدخول.');
     }
-    await request('DELETE', '/api/workers/${Uri.encodeComponent(workerId)}');
+    await request('DELETE', '/api/workers/${Uri.encodeComponent(workerId)}', forceOnline: true);
     // Even if the user switches accounts immediately after the HTTP response,
     // acknowledgement belongs only to the original owner's durable queue.
     _workerCacheVersion++;
     await offlineVault.confirmWorkerDelete(shop, owner, workerId);
+    await offlineVault.confirmWorkerRename(shop, owner, workerId, '', discard: true);
+  }
+
+  Future<Json> localReport(String path, Json? query) async {
+    final shop = savedShopId;
+    final customers = await offlineVault.indexedItems(shop,'/api/customers');
+    final suppliers = await offlineVault.indexedItems(shop,'/api/suppliers');
+    final parties = {for(final p in [...customers,...suppliers]) '${p['id']}':p};
+    final supplierIds = suppliers.map((p)=>'${p['id']}').toSet();
+    final rows = (await offlineVault.indexedItems(shop,'/api/transactions')).where((e)=>e['voidedAt']==null && OfflineProjection.isInsideDate(e,query)).toList();
+    int cents(dynamic n) => ((n as num? ?? 0)*100).round();
+    int payment(Json e) => e['pendingConfirmation']==true ? 0 : cents(e['kind']=='Payment'?e['amount']:e['paidNow']);
+    bool supplier(Json e) => supplierIds.contains('${e['partyId']}');
+    final known = rows.where((e)=>parties.containsKey('${e['partyId']}')).toList();
+    final cash = known.where((e)=>e['method']=='Cash' && payment(e)>0).toList();
+    int sum(Iterable<Json> r) => r.fold<int>(0,(a,e)=>a+payment(e));
+    double outstanding(List<Json> r) => r.fold<int>(0,(a,e)=>a+(cents(e['balance'])>0?cents(e['balance']):0))/100;
+    final received = sum(known.where((e)=>!supplier(e))), paid = sum(known.where(supplier));
+    final cashIn = sum(cash.where((e)=>!supplier(e))), cashOut = sum(cash.where(supplier));
+    if(path.endsWith('/summary')) return {'receivables':outstanding(customers),'payables':outstanding(suppliers),'received':received/100,'paid':paid/100,'offlinePartial':true};
+    if(path.endsWith('/cashflow')) return {'customerCashIn':cashIn/100,'supplierCashOut':cashOut/100,'netCash':(cashIn-cashOut)/100,'entries':cash,'offlinePartial':true};
+    return {'items':rows.where((e)=>['Debt','Purchase'].contains(e['kind'])).map((e)=>{'entry':e,'partyName':parties['${e['partyId']}']?['name']??'حساب سابق'}).toList(),'offlinePartial':true,'truncated':false};
   }
 
   Future<dynamic> _withLocalMovements(
@@ -263,15 +505,55 @@ class Api {
     if (path == '/api/workers') {
       final pending = await pendingWorkerDeletes();
       final ids = pending.map((e) => '${e['workerId']}').toSet();
+      final renames = {for (final r in await pendingWorkerRenames()) '${r['workerId']}': r};
+      final additions = (await pendingCatalog()).where((r) => r['collection']=='/api/workers').map((r) {
+        final b = r['body'] as Map;
+        return {'id':r['entityId'], 'name':b['name'], 'phoneNumber':b['phoneNumber'], 'enabled':true, 'offlineCreate':true};
+      }).toList();
       return <String, dynamic>{
         ...Map<String, dynamic>.from(raw),
-        'workers': ((raw['workers'] as List?) ?? [])
-            .where((w) => w is Map && !ids.contains('${w['id']}')).toList(),
+        'workers': [...additions, ... ((raw['workers'] as List?) ?? [])
+            .where((w) => w is Map && !ids.contains('${w['id']}'))
+            .map((w) { final worker = w as Map; final pendingRename = renames['${worker['id']}'];
+              return pendingRename == null ? worker : {...worker, 'name': pendingRename['workerName'], 'offlinePending': true}; }).where((w) => !additions.any((a) => a['id']==w['id'])).toList()],
         'pendingWorkerDeletes': pending,
       };
     }
-    final outbox = await offlineVault.readOutbox(_shopId!);
-    if (outbox.isEmpty) {
+    final catalog = await pendingCatalog();
+    final outbox = await currentOutbox();
+    if (path == '/api/transactions' || path.endsWith('/statement')) {
+      final key = path == '/api/transactions' ? 'items' : 'entries';
+      final actions = {for(final r in catalog.where((r)=>r['collection']=='/api/transactions')) '${r['entityId']}':r};
+      if (raw[key] is List) {
+        raw = {...raw, key:(raw[key] as List).map((e) {
+          if(e is! Map || !actions.containsKey('${e['id']}')) return e;
+          final action = actions['${e['id']}']!;
+          return {...e,'offlineLedgerAction':'${action['path']}'.endsWith('/void')?'void':'confirm','offlineActionError':action['lastError']};
+        }).toList()};
+      }
+    }
+    if (path == '/api/settings') {
+      var settings = Map<String,dynamic>.from(raw);
+      for(final record in catalog.where((r)=>r['collection']==path)) settings=OfflineCatalog.project(record,settings);
+      return settings;
+    }
+    final isCatalogList = ['/api/customers','/api/suppliers','/api/products'].contains(path);
+    final localCatalog = isCatalogList && (catalog.any((r) => r['collection'] == path) ||
+        (_offlineMode && await offlineVault.catalogChanged(savedShopId,path)));
+    if (path == '/api/products/categories' && (catalog.any((r) => r['collection'] == '/api/products') || (_offlineMode && await offlineVault.catalogChanged(savedShopId,'/api/products')))) {
+      final rows = await _catalogItems('/api/products');
+      return {'items': rows.map((p)=>'${p['category'] ?? ''}').where((v)=>v.isNotEmpty).toSet().toList()..sort(), 'offlinePartial':true};
+    }
+    if (path == '/api/products' && localCatalog) {
+      var rows = await _catalogItems(path);
+      final term = '${query?['search'] ?? ''}'.trim().toLowerCase();
+      rows = rows.where((p) => (term.isEmpty || ['name','unit'].any((f) => '${p[f] ?? ''}'.toLowerCase().contains(term))) &&
+          (query?['category'] == null || p['category'] == query!['category'])).toList();
+      rows.sort((a,b)=>'${a['name']}'.compareTo('${b['name']}'));
+      final page = (query?['page'] as num?)?.toInt() ?? 1, size = (query?['size'] as num?)?.toInt() ?? 30;
+      return {...raw,'items':rows.skip((page-1)*size).take(size).toList(),'total':rows.length,'offlinePartial':true};
+    }
+    if (outbox.isEmpty && catalog.isEmpty && !localCatalog) {
       if (path == '/api/transactions' && raw['offlinePartial'] == true) {
         return OfflineProjection.transactionList(
           Map<String, dynamic>.from(raw), <Map<String, dynamic>>[], query,
@@ -283,15 +565,18 @@ class Api {
     final entries = OfflineProjection.pendingEntries(outbox);
     final base = Map<String, dynamic>.from(raw);
     final kinds = await offlineVault.partyKinds(_shopId!);
+    for (final row in catalog) {
+      if (['/api/customers','/api/suppliers'].contains(row['collection'])) kinds['${row['entityId']}'] = row['collection'] == '/api/customers' ? 'Customer' : 'Supplier';
+    }
     if (path == '/api/transactions') {
       return OfflineProjection.transactionList(base, entries, query, kinds);
     }
     if (path == '/api/customers' || path == '/api/suppliers') {
       final kind = path == '/api/customers' ? 'Customer' : 'Supplier';
-      final locallyIndexed = _offlineMode
-          ? await offlineVault.indexedItems(_shopId!, path)
+      final locallyIndexed = (_offlineMode || localCatalog)
+          ? await _catalogItems(path)
           : <Map<String, dynamic>>[];
-      final source = locallyIndexed.isNotEmpty
+      final source = (locallyIndexed.isNotEmpty || localCatalog)
           ? locallyIndexed
           : (base['items'] as List? ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
       var adjusted = source.map((p) {
@@ -300,19 +585,29 @@ class Api {
         return {...p, 'balance': (p['balance'] as num? ?? 0) +
             OfflineProjection.partyDelta(id, entries)};
       }).toList();
-      if (locallyIndexed.isNotEmpty) {
+      if (locallyIndexed.isNotEmpty || localCatalog) {
         final term = '${query?['search'] ?? ''}'.toLowerCase().trim();
         adjusted = adjusted.where((p) => term.isEmpty ||
-            ['name', 'nickname', 'phone'].any((f) =>
+            ['name', 'nickname', 'phone', 'alternatePhone'].any((f) =>
                 '${p[f] ?? ''}'.toLowerCase().contains(term))).toList();
         final filter = '${query?['filter'] ?? ''}';
-        if (filter == 'debt') adjusted = adjusted.where((p) => (p['balance'] as num? ?? 0) > 0).toList();
+        if (filter == 'debt' || filter == 'owing') adjusted = adjusted.where((p) => (p['balance'] as num? ?? 0) > 0).toList();
         if (filter == 'credit') adjusted = adjusted.where((p) => (p['balance'] as num? ?? 0) < 0).toList();
         if (filter == 'settled') adjusted = adjusted.where((p) => (p['balance'] as num? ?? 0) == 0).toList();
         if (query?['category'] != null) {
           adjusted = adjusted.where((p) => '${p['category'] ?? ''}' == '${query!['category']}').toList();
         }
-        if (query?['sort'] == 'balance') {
+        if (filter == 'creditLimit') adjusted = adjusted.where((p) => (p['creditLimit'] as num? ?? 0) > 0 && (p['balance'] as num? ?? 0) >= (p['creditLimit'] as num)*.8).toList();
+        if (filter == 'scheduled') adjusted = adjusted.where((p) => '${p[kind == 'Customer' ? 'paymentSchedule' : 'deliveryDays'] ?? ''}'.isNotEmpty).toList();
+        if (filter == 'today' && kind == 'Supplier') {
+          const ar = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد'];
+          const en = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+          final d = DateTime.now().weekday-1;
+          adjusted = adjusted.where((p) => '${p['deliveryDays'] ?? ''}'.contains(ar[d]) || '${p['deliveryDays'] ?? ''}'.contains(en[d])).toList();
+        }
+        if (query?['sort'] == 'balanceAsc') adjusted.sort((a,b)=>(a['balance'] as num? ?? 0).compareTo(b['balance'] as num? ?? 0));
+        if (query?['sort'] == 'recent') adjusted.sort((a,b)=>'${b['lastActivity'] ?? ''}'.compareTo('${a['lastActivity'] ?? ''}'));
+        if (query?['sort'] == 'balance' || query?['sort'] == null) {
           adjusted.sort((a,b) => (b['balance'] as num? ?? 0).compareTo(a['balance'] as num? ?? 0));
         } else if (query?['sort'] == 'name') {
           adjusted.sort((a,b) => '${a['name']}'.compareTo('${b['name']}'));
@@ -328,8 +623,10 @@ class Api {
     if (path.startsWith('/api/parties/') && path.endsWith('/statement')) {
       final id = path.split('/')[3];
       final projected = OfflineProjection.statement(base, id, entries, query);
+      if (base['offlinePartial'] == true && base['closingBalance'] == null) projected['closingBalance'] = null;
       if (base['party'] is Map) {
-        final party = Map<String, dynamic>.from(base['party'] as Map);
+        final originalParty = Map<String,dynamic>.from(base['party'] as Map);
+        final party = catalog.any((r)=>r['entityId']==id) ? await _catalogParty(id) ?? originalParty : originalParty;
         return {
           ...projected,
           'party': {...party, 'balance': (party['balance'] as num? ?? 0) +
@@ -340,12 +637,22 @@ class Api {
     }
     if (path.startsWith('/api/parties/') && !path.endsWith('/statement')) {
       final id = path.split('/').last;
-      return {...base, 'balance': (base['balance'] as num? ?? 0) +
+      final row = catalog.any((r)=>r['entityId']==id) ? await _catalogParty(id) ?? base : base;
+      return {...row, 'balance': (row['balance'] as num? ?? 0) +
           OfflineProjection.partyDelta(id, entries)};
     }
     if (path == '/api/customers/overview' || path == '/api/suppliers/overview') {
       final kindPath = path.replaceFirst('/overview', '');
-      final parties = await offlineVault.indexedItems(_shopId!, kindPath);
+      final parties = await _catalogItems(kindPath);
+      if (catalog.any((r)=>r['collection']==kindPath)) {
+        final rows = parties.map((p)=>{...p,'balance':(p['balance'] as num? ?? 0)+OfflineProjection.partyDelta('${p['id']}',entries)}).toList();
+        return {...base,'total':rows.length,'owing':rows.where((p)=>(p['balance'] as num)>0).length,
+          'credit':rows.where((p)=>(p['balance'] as num)<0).length,'settled':rows.where((p)=>p['balance']==0).length,
+          'outstanding':rows.where((p)=>(p['balance'] as num)>0).fold<num>(0,(a,p)=>a+(p['balance'] as num)),
+          'scheduled':rows.where((p)=>'${p[kindPath == '/api/customers'?'paymentSchedule':'deliveryDays'] ?? ''}'.isNotEmpty).length,
+          'nearCreditLimit':rows.where((p)=>(p['creditLimit'] as num? ?? 0)>0 && (p['balance'] as num)>=(p['creditLimit'] as num)*.8).length,
+          'categories':rows.map((p)=>'${p['category'] ?? ''}').where((v)=>v.isNotEmpty).toSet().toList()..sort(), 'offlinePartial':true};
+      }
       var outstandingDifference = 0.0;
       var owingDifference = 0;
       var creditDifference = 0;
@@ -420,51 +727,48 @@ class Api {
     return base;
   }
 
-  /// A timed-out POST may have reached the server. Once the corresponding
-  /// entry is observed in a fresh server read, acknowledge that local record
-  /// rather than counting it twice. Preserve it if the payload differs.
-  Future<void> _reconcileConfirmed(String path, dynamic data) async {
-    if (_shopId == null || data is! Map) return;
-    if (path != '/api/transactions' &&
-        !path.endsWith('/statement')) return;
-    final serverEntries = (path == '/api/transactions'
-        ? data['items'] : data['entries']);
-    if (serverEntries is! List || serverEntries.isEmpty) return;
-    final server = <String, Map<String, dynamic>>{
-      for (final raw in serverEntries.whereType<Map>())
-        if ('${raw['operationId'] ?? ''}'.isNotEmpty)
-          '${raw['operationId']}': Map<String, dynamic>.from(raw),
-    };
-    for (final record in await offlineVault.readOutbox(_shopId!)) {
-      final id = '${record['operationId']}';
-      final saved = server[id];
-      if (saved == null || record['body'] is! Map) continue;
-      final body = Map<String, dynamic>.from(record['body'] as Map);
-      if ('${saved['partyId']}' == '${body['partyId']}' &&
-          '${saved['kind']}' == '${body['kind']}' &&
-          (saved['amount'] as num? ?? -1) == (body['amount'] as num? ?? -2)) {
-        await offlineVault.removeTransaction(_shopId!, id);
-      }
-    }
-  }
-
   // Cache the primary account lists while online, so search and party selection
   // keep working after connectivity is lost, even with changed search terms.
   Future<void> warmOfflineCatalog() async {
-    if (_shopId == null || _access == null || isOffline) return;
-    final tasks = <Future<dynamic>>[
-      if (_verifiedOwnerId != null) get('/api/workers'),
-      get('/api/dashboard'),
-      get('/api/customers/overview'),
-      get('/api/suppliers/overview'),
-      get('/api/products/categories'),
-      get('/api/products', query: {'search': '', 'page': 1, 'size': 100}),
-      for (final path in ['/api/customers', '/api/suppliers'])
-        get(path, query: {'search': '', 'sort': 'name', 'page': 1, 'size': 100}),
-      for (final kind in ['Customer', 'Supplier'])
-        get('/api/transactions', query: {'partyKind': kind, 'page': 1, 'size': 100}),
-    ];
-    await Future.wait(tasks.map((task) => task.catchError((_) => null)));
+    if (_warming || _shopId == null || _access == null || isOffline || offlineExpired) return;
+    _warming = true;
+    final generation = _generation;
+    bool ready() => generation == _generation && !isOffline && !offlineExpired;
+    try {
+      for (final path in [
+        if (_verifiedOwnerId != null) '/api/workers',
+        '/api/settings', '/api/dashboard', '/api/customers/overview', '/api/suppliers/overview',
+        '/api/products/categories',
+      ]) {
+        if (!ready()) return;
+        try { await get(path); } catch (_) { if (!ready()) return; }
+      }
+      // Sequential pages keep memory/network pressure low on old phones.
+      for (final spec in <(String, Json)>[
+        ('/api/products', {'search': ''}),
+        ('/api/customers', {'search': '', 'sort': 'name'}),
+        ('/api/suppliers', {'search': '', 'sort': 'name'}),
+        ('/api/transactions', {'partyKind': 'Customer'}),
+        ('/api/transactions', {'partyKind': 'Supplier'}),
+      ]) {
+        if (!ready()) return;
+        try {
+          for (var page = 1; ready(); page++) {
+            final query = <String, dynamic>{...spec.$2, 'page': page, 'size': 100};
+            await get(spec.$1, query: query);
+            if (!ready()) return;
+            final raw = await offlineVault.readSnapshot(savedShopId, spec.$1, query);
+            if (raw is! Map) break;
+            final data = raw;
+            final items = data['items'];
+            if (items is! List || items.isEmpty || !ready()) break;
+            final total = (data['total'] as num?)?.toInt();
+            final size = (data['pageSize'] as num?)?.toInt() ?? 100;
+            if (size <= 0 || items.length < size || (total != null && page * size >= total)) break;
+          }
+        } catch (_) { if (!ready()) return; }
+      }
+    } finally { _warming = false; }
   }
 
   /// Returns the number of successfully synchronized operations. Failed
@@ -480,6 +784,13 @@ class Api {
     if (_access == null) await refresh();
     if (_access == null || generation != _generation || _shopId != shop) {
       throw ApiFailure('الاتصال بالخادم غير متاح للمزامنة.');
+    }
+    final status = _responseObject(await request('GET', '/api/subscription', forceOnline: true));
+    if (generation != _generation || _shopId != shop || status['id'] != shop) {
+      throw ApiFailure('تغيّرت جلسة الدخول.');
+    }
+    if (status['active'] != true || status['suspended'] == true) {
+      throw ApiFailure('الاشتراك غير فعال. العمليات المحلية محفوظة.', status: 403);
     }
     var completed = 0;
     final entries = await offlineVault.readOutbox(shop);
@@ -504,51 +815,85 @@ class Api {
         }
       }
     }
+    if (owner != null) {
+      for (final rename in await offlineVault.readWorkerRenames(shop, owner)) {
+        if (generation != _generation || _shopId != shop) throw ApiFailure('تغيّرت جلسة الدخول.');
+        final id = '${rename['workerId']}'; final name = '${rename['workerName']}';
+        if (workerDeletes.any((e) => e['workerId'] == id)) continue;
+        if (rename['lastError'] != null) continue; // explicit review, not silent overwrite
+        try {
+          await request('PUT', '/api/workers/${Uri.encodeComponent(id)}/name', forceOnline: true,
+            body: {'name': name, 'expectedName': rename['expectedName']});
+          _workerCacheVersion++;
+          await offlineVault.confirmWorkerRename(shop, owner, id, name);
+          completed++;
+        } on ApiFailure catch (e) {
+          if (generation != _generation || e.status == null || e.status! >= 500 || e.status == 429) rethrow;
+          await offlineVault.recordWorkerRenameError(shop, owner, id, name, e.message);
+          if (e.status == 401 || e.status == 403) rethrow;
+          workerFailure = e;
+        }
+      }
+    }
     if (generation != _generation || _shopId != shop) {
       throw ApiFailure('تغيّرت جلسة الدخول.');
     }
-    // A disconnected app with an empty outbox must still detect that internet
-    // returned. GET requests normally prefer cache while _offlineMode is true.
-    if (_offlineMode &&
-        (entries.isEmpty || entries.every((e) => e['blocked'] == true))) {
-      try {
-        final response = await dio.get(
-          '/api/subscription',
-          options: Options(
-            headers: {'Authorization': 'Bearer $_access'},
-            receiveTimeout: const Duration(seconds: 5),
-            sendTimeout: const Duration(seconds: 5),
-          ),
-        );
-        if (generation != _generation || _shopId != shop) {
-          throw ApiFailure('تغيّرت جلسة الدخول.');
+    final actor = _verifiedUserId;
+    final catalog = await offlineCatalog.pending(shop,actor);
+    final ordered = <Json>[...entries.where((e)=>e['userId']==actor && actor!=null), ...catalog];
+    ordered.sort((a,b)=>'${a['savedAt']}'.compareTo('${b['savedAt']}'));
+    for (final entry in ordered) {
+      if (generation != _generation || _shopId != shop || actor != _verifiedUserId) throw ApiFailure('تغيّرت جلسة الدخول.');
+      final body = Map<String,dynamic>.from(entry['body'] as Map);
+      if (entry['kind'] == 'CatalogMutation') {
+        final id = '${entry['operationId']}';
+        if (entry['lastError'] != null) throw ApiFailure('راجع عملية بيانات معلقة في مركز المزامنة.');
+        try {
+          final isSettings = entry['collection']=='/api/settings';
+          final response = await request('${entry['method']}', isSettings ? '/api/settings/offline' : '${entry['path']}',
+            body:isSettings ? {'settings':body,'expected':entry['expected']} : body, forceOnline:true,
+            extraHeaders:{'X-Offline-Operation':id, if(!isSettings && entry['expected']!=null) 'X-Offline-Expected':base64Encode(utf8.encode(jsonEncode(entry['expected'])))});
+          if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
+          if (entry['method']!='DELETE' && (response is! Map || (isSettings ? response['collectionAccounts'] is! List : '${response['id']}'!='${entry['entityId']}'))) {
+            throw ApiFailure('رد المزامنة غير مطابق للسجل؛ العملية محفوظة.');
+          }
+          _catalogCacheVersion++;
+          if (entry['collection']=='/api/workers') {
+            _workerCacheVersion++;
+            final old = await offlineVault.readSnapshot(shop,'/api/workers',null);
+            final rows = (old is Map ? old['workers'] as List? : null) ?? [];
+            await offlineVault.saveWorkerSnapshot(shop,{'workers':[...rows.where((w)=>w is Map && w['id']!=response['id']),response],'limit':2});
+          } else if (entry['collection']=='/api/transactions') {
+            await offlineVault.confirmCatalog(shop,'/api/transactions','${entry['entityId']}',response);
+            // Refresh affected authoritative balance before acknowledging.
+            final party = await request('GET','/api/parties/${response['partyId']}',forceOnline:true);
+            if (generation != _generation || _shopId != shop) throw ApiFailure('تغيّرت جلسة الدخول.');
+            if (party is! Map) throw ApiFailure('لم يتم تحديث الرصيد بعد.');
+            await offlineVault.confirmCatalog(shop,party['kind']=='Supplier'?'/api/suppliers':'/api/customers','${party['id']}',party);
+          } else if (isSettings) {
+            await offlineVault.saveSnapshot(shop,'/api/settings',null,response);
+          } else {
+            await offlineVault.confirmCatalog(shop,'${entry['collection']}','${entry['entityId']}',response,deleted:entry['method']=='DELETE');
+          }
+          await offlineCatalog.acknowledge(shop,actor!,id);
+          completed++;
+        } on ApiFailure catch(e) {
+          if ([400,404,409,422].contains(e.status)) await offlineCatalog.error(shop,actor!,id,e.message);
+          rethrow;
         }
-        _setOffline(false);
-        await offlineVault.saveSnapshot(shop, '/api/subscription', null, response.data);
-      } on DioException catch (e) {
-        // A deleted worker may have no pending transactions. Do not keep a
-        // revoked identity in offline mode after a server authentication error.
-        if (generation == _generation && e.response?.statusCode == 401) {
-          await refresh();
-        } else if (generation == _generation && e.response?.statusCode == 403) {
-          await clear();
-          throw ApiFailure.from(e);
+      } else {
+        if (entry['blocked'] == true) {
+          if (catalog.isNotEmpty) throw ApiFailure('راجع الحركة المالية المرفوضة قبل مزامنة التعديلات التالية.');
+          continue;
         }
-      }
-    }
-    for (final entry in entries) {
-      if (generation != _generation || _shopId != shop) {
-        throw ApiFailure('تغيّرت جلسة الدخول.');
-      }
-      if (entry['blocked'] == true) continue;
-      final body = Map<String, dynamic>.from(entry['body'] as Map);
-      try {
-        final response = await request('POST', '/api/transactions', body: body);
-        if (response is Map && response['queued'] == true) break;
-        completed++;
-      } on ApiFailure catch (e) {
-        if ([400, 404, 409, 422].contains(e.status)) continue;
-        rethrow;
+        try {
+          final response = await request('POST','/api/transactions',body:body,forceOnline:true);
+          if(response is Map && response['queued']==true) break;
+          completed++;
+        } on ApiFailure catch(e) {
+          if ([400,404,409,422].contains(e.status) && catalog.isEmpty) continue;
+          rethrow;
+        }
       }
     }
     if (workerFailure != null) throw workerFailure;
@@ -633,6 +978,14 @@ class Api {
       await _accept(tokens, generation);
       _shopId = null;
       _verifiedOwnerId = null;
+      _verifiedUserId = null;
+      _verifiedAt = null;
+      _maxObservedAt = null;
+      _clockUntrusted = false;
+      _monotonicBase = null;
+      _graceWatch.stop();
+      lastVerifiedStatus = null;
+      await SyncReminders.cancel();
       _setOffline(false);
       // A new identity must not inherit a previous account's offline snapshots.
       await storage.delete('offline.identity');
@@ -648,12 +1001,14 @@ class Api {
       final saved = jsonDecode(raw) as Map;
       _refresh = saved['refreshToken'] as String;
       _refreshExpiry = DateTime.parse(saved['refreshTokenExpiresAt'] as String);
-      if (!(_refreshExpiry?.isAfter(DateTime.now()) ?? false) &&
-          await _restoreOfflineIdentity()) return;
+      // Load the verified metadata first, even when the refresh succeeds but
+      // the following subscription request loses connectivity.
+      final restored = await _restoreOfflineIdentity();
+      if (!(_refreshExpiry?.isAfter(DateTime.now()) ?? false) && restored) return;
       try {
         await refresh();
       } on ApiFailure catch (e) {
-        if (e.status == null && await _restoreOfflineIdentity()) return;
+        if (e.status == null && restored) return;
         if (e.status == 401) await clear();
       }
     } catch (_) {
@@ -703,13 +1058,23 @@ class Api {
     String path, {
     Json? query,
     Object? body,
+    bool forceOnline = false,
+    Map<String,String>? extraHeaders,
   }) async {
     final generation = _generation;
     final original = _access;
     final workerCacheVersion = _workerCacheVersion;
+    final catalogCacheVersion = _catalogCacheVersion;
     final readable = method == 'GET';
+    final subscription = readable && path == '/api/subscription';
+    if (!subscription) _requireOfflineAccess();
     if (readable && path == '/api/workers' && _offlineMode && _verifiedOwnerId == null) {
       throw ApiFailure('اتصل بالإنترنت بحساب صاحب المحل لتحميل العاملين.');
+    }
+    final newOfflineAction = path == '/api/workers' || path.startsWith('/api/transactions/');
+    if (!forceOnline && OfflineCatalog.supports(method,path) && lastVerifiedStatus?['offlineCatalogVersion'] == 1 &&
+        (!newOfflineAction || lastVerifiedStatus?['offlineActionVersion']==1)) {
+      return _queueCatalog(method,path,body);
     }
     final queuedTransaction =
         method == 'POST' &&
@@ -722,27 +1087,51 @@ class Api {
         : null;
     if (queuedTransaction) {
       // Durable write first. Sending and crash recovery reuse the same ID.
-      await offlineVault.addTransaction(_shopId!, transactionBody!);
+      final userId = _verifiedUserId;
+      if (userId == null) throw ApiFailure('اتصل بالخادم للتحقق من هوية مسجّل الحركة.');
+      await offlineVault.addTransaction(_shopId!, transactionBody!, userId: userId);
+      if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
+      if (!forceOnline && (_offlineMode || (await pendingCatalog()).isNotEmpty)) {
+        return {'queued': true, 'operationId': transactionBody!['operationId']};
+      }
     }
 
     Future<dynamic> snapshotOrThrow(ApiFailure error) async {
+      if (forceOnline) {
+        if (error.status == null || error.status! >= 500) _setOffline(true);
+        throw error;
+      }
+      if (!subscription) _requireOfflineAccess();
       if (readable && _shopId != null &&
           (path != '/api/workers' || _verifiedOwnerId != null) &&
           (error.status == null || error.status! >= 500)) {
+        if (['/api/reports/summary','/api/reports/cashflow','/api/reports/purchases'].contains(path)) {
+          _setOffline(true);
+          return localReport(path,query);
+        }
         var saved = await offlineVault.readBestSnapshot(_shopId!, path, query);
+        if (saved == null && ['/api/customers','/api/suppliers','/api/products'].contains(path) &&
+            (await pendingCatalog()).any((r)=>r['collection']==path)) saved = {'items':[], 'total':0, 'offlinePartial':true};
+        if (path.startsWith('/api/parties/') && !path.endsWith('/statement')) {
+          final id = path.split('/').last;
+          final row = await _catalogParty(id);
+          if (row != null && (saved == null || (await pendingCatalog()).any((r)=>r['entityId']==id))) saved = row;
+        }
         if (saved == null && path == '/api/transactions') {
           saved = {'items': <dynamic>[], 'total': 0, 'offlinePartial': true};
         }
         if (saved == null && path.startsWith('/api/parties/') &&
             path.endsWith('/statement')) {
           final id = path.split('/')[3];
-          final party = await offlineVault.findParty(_shopId!, id);
+          final party = await _catalogParty(id);
           if (party != null) {
             saved = {
               'party': party,
-              'openingBalance': party['balance'] ?? 0,
-              'closingBalance': party['balance'] ?? 0,
-              'entries': <dynamic>[],
+              'openingBalance': query?['from'] == null ? party['openingBalance'] : null,
+              'closingBalance': query?['to'] == null ? party['balance'] : null,
+              'entries': (await offlineVault.indexedItems(_shopId!, '/api/transactions'))
+                  .where((e) => '${e['partyId']}' == id && OfflineProjection.isInsideDate(e, query)).toList()
+                  ..sort((a,b) => '${a['occurredAt']}'.compareTo('${b['occurredAt']}')),
               'offlinePartial': true,
             };
           }
@@ -759,11 +1148,27 @@ class Api {
       throw error;
     }
 
+    if (!forceOnline && readable && _shopId != null && path.startsWith('/api/parties/')) {
+      final id = path.split('/')[3];
+      if ((await pendingCatalog()).any((r)=>r['entityId']==id && r['method']=='POST' && ['/api/customers','/api/suppliers'].contains(r['collection']))) {
+        final party = await _catalogParty(id);
+        if (party != null) {
+          if (!path.endsWith('/statement')) return _withLocalMovements(path,query,party);
+          return _withLocalMovements(path,query,{'party':party,'entries':<dynamic>[],
+            'openingBalance':party['openingBalance'],'closingBalance':party['balance'],'offlinePartial':true});
+        }
+      }
+    }
     // An already-offline session should display the durable snapshot
     // immediately instead of waiting through another network timeout.
-    if (_offlineMode && readable && _shopId != null) {
+    if (!forceOnline && _offlineMode && readable && _shopId != null) {
+      if (['/api/reports/summary','/api/reports/cashflow','/api/reports/purchases'].contains(path)) return localReport(path,query);
       final cached = await offlineVault.readBestSnapshot(_shopId!, path, query);
       if (cached != null) return _withLocalMovements(path, query, cached);
+      return snapshotOrThrow(ApiFailure('البيانات غير متاحة محلياً. اتصل بالإنترنت أولاً.'));
+    }
+    if (_offlineMode && !readable && !forceOnline && !queuedTransaction) {
+      throw ApiFailure('هذه العملية تحتاج الاتصال بالخادم حالياً.');
     }
     if (_access == null) {
       return snapshotOrThrow(
@@ -776,7 +1181,7 @@ class Api {
       queryParameters: query,
       options: Options(
         method: method,
-        headers: {'Authorization': 'Bearer $_access'},
+        headers: {'Authorization': 'Bearer $_access', ...?extraHeaders},
       ),
     );
     try {
@@ -796,6 +1201,7 @@ class Api {
         result = await send();
       }
       if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
+      if (subscription) await _rememberLiveStatus(_responseObject(result.data));
       _setOffline(false);
       if (readable && _shopId != null) {
         if (path == '/api/workers') {
@@ -808,12 +1214,45 @@ class Api {
             if (saved != null) return _withLocalMovements(path, query, saved);
           }
         } else {
-          await _reconcileConfirmed(path, result.data);
+          final isCatalogRead = path == '/api/settings' || path == '/api/transactions' || path.startsWith('/api/parties/') ||
+              path.startsWith('/api/customers') || path.startsWith('/api/suppliers') || path.startsWith('/api/products');
+          if (isCatalogRead && catalogCacheVersion != _catalogCacheVersion) {
+            // A response that started before a catalog acknowledgement must not resurrect a deleted product.
+            final saved = await offlineVault.readBestSnapshot(_shopId!,path,query);
+            if (saved != null) return _withLocalMovements(path,query,saved);
+            return _withLocalMovements(path,query,result.data);
+          }
           await offlineVault.saveSnapshot(_shopId!, path, query, result.data);
           await offlineVault.indexResponse(_shopId!, path, query, result.data);
+          if (path.startsWith('/api/parties/') && result.data is Map) {
+            final responseMap = result.data as Map;
+            if (path.endsWith('/statement') && responseMap['entries'] is List) {
+              await offlineVault.indexResponse(_shopId!,'/api/transactions',null,{'items':responseMap['entries']});
+            }
+            final row = path.endsWith('/statement') ? responseMap['party'] : responseMap;
+            if (row is Map) {
+            final collection = row['kind']=='Supplier' ? '/api/suppliers' : '/api/customers';
+            await offlineVault.indexResponse(_shopId!,collection,null,{'items':[row]});
+            }
+          }
         }
       }
       if (queuedTransaction) {
+        final saved = result.data;
+        if (saved is! Map || '${saved['operationId']}'!='${transactionBody!['operationId']}' || '${saved['id'] ?? ''}'.isEmpty) {
+          throw ApiFailure('رد حفظ الحركة غير مطابق. ستبقى العملية في قائمة المزامنة.');
+        }
+        final shop = _shopId!;
+        dynamic card;
+        try { card = await request('GET','/api/parties/${saved['partyId']}',forceOnline:true); }
+        on ApiFailure {
+          if (generation != _generation) throw ApiFailure('تغيّرت جلسة الدخول.');
+          return {'queued':true,'operationId':transactionBody!['operationId']};
+        }
+        if (generation != _generation || _shopId != shop) throw ApiFailure('تغيّرت جلسة الدخول.');
+        if (card is! Map) throw ApiFailure('لم يتم تحديث الرصيد بعد؛ الحركة محفوظة للمراجعة.');
+        await offlineVault.confirmCatalog(shop,'/api/transactions','${saved['id']}',saved);
+        await offlineVault.confirmCatalog(shop,card['kind']=='Supplier'?'/api/suppliers':'/api/customers','${card['id']}',card);
         await offlineVault.removeTransaction(
           _shopId!,
           '${transactionBody!['operationId']}',
@@ -849,6 +1288,7 @@ class Api {
   /// invoices contain sensitive supplier information. Cache only after viewing,
   /// scoped to the signed-in shop so it can be viewed offline again.
   Future<Uint8List> getInvoicePhoto(String id) async {
+    _requireOfflineAccess();
     final shopId = _shopId;
     if (shopId == null || shopId.isEmpty) {
       throw ApiFailure('حساب المحل غير متاح.');
@@ -908,8 +1348,17 @@ class Api {
     _refreshExpiry = null;
     _shopId = null;
     _verifiedOwnerId = null;
+    _verifiedUserId = null;
+    _verifiedAt = null;
+    _maxObservedAt = null;
+    _clockUntrusted = false;
+    _monotonicBase = null;
+    _graceWatch.stop();
+    lastVerifiedStatus = null;
+    await SyncReminders.cancel();
     _setOffline(false);
     await storage.delete('offline.identity');
+    await storage.delete('offline.clock');
     onSignedOut?.call();
     await _write(() => storage.delete('session'));
   }

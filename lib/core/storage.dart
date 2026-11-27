@@ -19,10 +19,11 @@ class DeviceStorage implements Storage {
 }
 
 class PendingOperation {
-  PendingOperation(this.storage, this.shopId);
+  PendingOperation(this.storage, this.shopId, {this.userId});
   final Storage storage;
   final String shopId;
-  String get key => 'pending.$shopId';
+  final String? userId;
+  String get key => userId == null ? 'pending.$shopId' : 'pending.$shopId.$userId';
   Future<Map<String, dynamic>?> read() async {
     final s = await storage.read(key);
     return s == null ? null : Map<String, dynamic>.from(jsonDecode(s));

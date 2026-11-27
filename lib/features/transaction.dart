@@ -312,7 +312,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
 
   Future<void> restore() async {
     final s = Scope.of(context);
-    draft = PendingOperation(s.api.storage, s.shopId);
+    draft = PendingOperation(s.api.storage, s.shopId, userId: s.api.verifiedUserId);
     try {
       final data = await draft.read();
       if (data != null) {
@@ -439,6 +439,11 @@ class _TransactionScreenState extends State<TransactionScreen> {
   }
 
   Future<void> save() async {
+    final activeApi = Scope.of(context).api;
+    if (draft.shopId != activeApi.savedShopId || draft.userId != activeApi.verifiedUserId) {
+      message(context, 'تغيّر الحساب. افتح شاشة الحركة من جديد.');
+      return;
+    }
     if (pending != null &&
         !modern &&
         [

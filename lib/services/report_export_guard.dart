@@ -24,12 +24,7 @@ class ReportExportGuard {
     Session session,
   ) async {
     if (session.isOffline) {
-      message(
-        context,
-        'التصدير يحتاج اتصالاً بالخادم لجلب جميع الحركات. '
-        'اتصل بالإنترنت ثم حدّث التقرير. الحركات غير المتزامنة محفوظة على الجهاز.',
-      );
-      return false;
+      return confirm(context,'تصدير نسخة محلية غير مكتملة', 'سيتم تصدير البيانات المتزامنة المخزنة على الجهاز فقط. قد تكون ناقصة أو قديمة، ولا تشمل الطلبات المحلية غير المعتمدة. هل تريد المتابعة؟');
     }
     if (session.pendingFinancialSync == 0) return true;
     return confirm(

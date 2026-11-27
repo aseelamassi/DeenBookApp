@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -27,9 +28,38 @@ void main() {
   }
 }
 
-class DeenBookApp extends StatelessWidget {
+class DeenBookApp extends StatefulWidget {
   const DeenBookApp({super.key, required this.session});
   final Session session;
+  @override
+  State<DeenBookApp> createState() => _DeenBookAppState();
+}
+
+class _DeenBookAppState extends State<DeenBookApp> with WidgetsBindingObserver {
+  Session get session => widget.session;
+  Timer? _graceTimer;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _graceTimer = Timer.periodic(const Duration(seconds: 30), (_) => _check());
+  }
+  Future<void> _check() async {
+    if (!mounted || !session.api.signedIn) return;
+    await session.checkOfflineGrace();
+    if (!mounted) return;
+    if (session.api.offlineExpired && !session.syncing) unawaited(session.synchronize());
+  }
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _check();
+  }
+  @override
+  void dispose() {
+    _graceTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) => Scope(
     session: session,
@@ -38,7 +68,7 @@ class DeenBookApp extends StatelessWidget {
       builder: (context, _) => MaterialApp(
         key: ValueKey(
           session.api.signedIn
-              ? '${session.shopId}:${session.active}'
+              ? '${session.shopId}:${session.api.verifiedUserId}:${session.active}:${session.api.offlineExpired}'
               : 'signed-out',
         ),
         title: 'دفتر دين',
@@ -51,7 +81,20 @@ class DeenBookApp extends StatelessWidget {
               constraints: BoxConstraints(
                 maxWidth: MediaQuery.sizeOf(context).width >= 700 ? 820 : 480,
               ),
-              child: child!,
+              child: Column(
+                children: [
+                  if (session.api.signedIn && !session.api.offlineExpired && session.api.grace.reminderDay != null)
+                    Material(
+                      color: const Color(0xFFFFE4B5),
+                      child: SafeArea(bottom: false, child: Row(children: [
+                        const Padding(padding: EdgeInsets.all(8), child: Icon(Icons.sync_problem)),
+                        Expanded(child: Text('مرّ ${session.api.grace.reminderDay} أيام دون تحقق من الخادم. زامن الآن قبل انتهاء مهلة ${session.api.offlineGraceDays} أيام.', style: const TextStyle(fontSize: 12))),
+                        TextButton(onPressed: session.syncing ? null : () { unawaited(session.synchronize()); }, child: const Text('مزامنة الآن')),
+                      ])),
+                    ),
+                  Expanded(child: child!),
+                ],
+              ),
             ),
           ),
         ),
@@ -78,6 +121,21 @@ class DeenBookApp extends StatelessWidget {
               )
             : !session.api.signedIn
             ? const LoginScreen()
+            : session.api.offlineExpired
+            ? Scaffold(
+                body: SafeArea(child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Empty(
+                  'انتهت مدة العمل دون إنترنت',
+                  'مدة السماح المحددة ${session.api.offlineGraceDays} أيام كحد أقصى، أو حتى انتهاء الاشتراك. بياناتك وعملياتك المحلية محفوظة. اتصل بالخادم للتحقق والمزامنة.',
+                  action: Column(children: [
+                    if (session.syncError != null) Text(session.syncError!),
+                    BusyButton(label: 'مزامنة الآن', busy: session.syncing, onPressed: () async {
+                      await session.synchronize();
+                      if (!session.api.offlineExpired) await session.reload();
+                    }),
+                    TextButton(onPressed: session.syncing ? null : () async { await session.api.clear(); }, child: const Text('إعادة تسجيل الدخول (لا تحذف الحركات المحلية)')),
+                  ]),
+                ))),
+              )
             : session.error != null
             ? Scaffold(
                 body: SafeArea(

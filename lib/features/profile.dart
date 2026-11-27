@@ -15,6 +15,9 @@ import '../ui/password_strength.dart';
 import 'sync_center.dart';
 import '../ui/widgets.dart';
 
+// Play build: access already-entitled accounts or start a free trial, no purchase flow.
+const playConsumptionOnly = bool.fromEnvironment('PLAY_CONSUMPTION_ONLY');
+
 // API values agreed with the existing Registration and Subscription endpoints.
 const _paymentDestinationLabels = <String, String>{
   'bank': 'بنك فلسطين',
@@ -128,6 +131,7 @@ class _AccountHelpState extends State<AccountHelp> {
 
   Future<void> submitRegistration() async {
     if (busy) return;
+    if (playConsumptionOnly && !trial) return;
     if (!trial && sender.text.trim().isEmpty) {
       setState(() => error = 'اسم صاحب الحوالة مطلوب');
       return;
@@ -232,8 +236,8 @@ class _AccountHelpState extends State<AccountHelp> {
                                 Text(
                                   [
                                     'بيانات المحل',
-                                    'اختر الخطة',
-                                    'الدفع والتفعيل',
+                                    playConsumptionOnly ? 'التجربة المجانية' : 'اختر الخطة',
+                                    playConsumptionOnly ? 'تأكيد التسجيل' : 'الدفع والتفعيل',
                                   ][i],
                                   style: appText(
                                     10,
@@ -255,7 +259,7 @@ class _AccountHelpState extends State<AccountHelp> {
                       : [
                           'افتح دفتر محلك الإلكتروني في دقيقة',
                           'ابدأ بالطريقة التي تناسبك',
-                          'تحويل رسوم الاشتراك وتفعيل المحل',
+                          playConsumptionOnly ? 'تأكيد إنشاء الحساب' : 'تحويل رسوم الاشتراك وتفعيل المحل',
                         ][step],
                   style: appText(22, weight: FontWeight.w900),
                 ),
@@ -265,8 +269,8 @@ class _AccountHelpState extends State<AccountHelp> {
                       ? 'تواصل مع إدارة الخدمة لاستعادة الوصول إلى حسابك.'
                       : [
                           'أدخل بيانات المحل ورقم الجوال الذي ستستخدمه للدخول.',
-                          'جرّب دفتر دين 14 يوماً مجاناً، أو اختر اشتراكك.',
-                          'راجع بيانات تحويل الاشتراك. يتطلب التفعيل موافقة الإدارة.',
+                          playConsumptionOnly ? 'جرّب دفتر دين 14 يوماً مجاناً.' : 'جرّب دفتر دين 14 يوماً مجاناً، أو اختر اشتراكك.',
+                          playConsumptionOnly ? 'راجع بيانات الحساب قبل التسجيل.' : 'راجع بيانات تحويل الاشتراك. يتطلب التفعيل موافقة الإدارة.',
                         ][step],
                   style: appText(12, color: secondaryText),
                 ),
@@ -371,6 +375,7 @@ class _AccountHelpState extends State<AccountHelp> {
                       ),
                     ),
                   ),
+                  if (!playConsumptionOnly) ...[
                   const SizedBox(height: 20),
                   const Heading('خطط الاشتراك'),
                   Plans(
@@ -380,6 +385,7 @@ class _AccountHelpState extends State<AccountHelp> {
                       trial = false;
                     }),
                   ),
+                  ],
                 ],
                 if (!widget.reset && step == 2) ...[
                   Surface(child: Column(
@@ -860,7 +866,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     ),
   );
   Future<void> requestRenewal() async {
-    if (busy) return;
+    if (busy || playConsumptionOnly) return;
     if (sender.text.trim().isEmpty) {
       message(context, 'اسم صاحب الحوالة مطلوب');
       return;
@@ -909,6 +915,18 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   @override
   Widget build(BuildContext context) {
     final s = Scope.of(context);
+    if (playConsumptionOnly) {
+      return Scaffold(appBar: AppBar(title: const Text('حالة الاشتراك'), automaticallyImplyLeading: !widget.gate),
+        body: Width(max: 480, child: ListView(padding: const EdgeInsets.all(20), children: [
+          Heading(s.active ? 'الاشتراك فعّال' : 'الاشتراك غير فعّال'),
+          Text(s.shopName),
+          Text('صالح حتى ${day(s.status?['paidUntil'])}'),
+          const Text('يمكن استخدام الحسابات ذات الاشتراك الفعّال. بياناتك محفوظة.'),
+          const SizedBox(height: 16),
+          BusyButton(label: 'تحديث حالة الحساب', busy: busy, onPressed: refreshActivation),
+          TextButton(onPressed: signOut, child: const Text('تسجيل الخروج')),
+        ])));
+    }
     return Scaffold(
       appBar: AppBar(
         title: Text(activationStatus == 'Pending'
@@ -1102,10 +1120,6 @@ class _WorkersScreenState extends State<WorkersScreen> {
   Future<void> add() async {
     if (saving || workers.length >= 2) return;
     final session = Scope.of(context);
-    if (session.isOffline) {
-      message(context, 'إضافة عامل جديد تحتاج إلى اتصال بالإنترنت.');
-      return;
-    }
     final normalized = phoneNumber(phone.text);
     if (name.text.trim().isEmpty || name.text.trim().length > 160 ||
         normalized == null || password.text.length < 12) {
@@ -1114,24 +1128,15 @@ class _WorkersScreenState extends State<WorkersScreen> {
     }
     setState(() => saving = true);
     try {
-      if ((await session.api.pendingWorkerDeletes()).isNotEmpty) {
-        await session.synchronize();
-        if (!mounted) return;
-        await load();
-        if (!mounted) return;
-        if ((await session.api.pendingWorkerDeletes()).isNotEmpty) {
-          if (mounted) message(context, 'زامن حذف العامل أولاً قبل إضافة عامل جديد.');
-          return;
-        }
-      }
       if (!mounted || workers.length >= 2) return;
-      await session.api.request('POST', '/api/workers', body: {
+      final result = await session.api.request('POST', '/api/workers', body: {
         'name': name.text.trim(), 'phoneNumber': normalized, 'password': password.text,
       });
       if (!mounted) return;
       name.clear(); phone.clear(); password.clear();
       await load();
-      if (mounted) message(context, 'تمت إضافة العامل بنجاح');
+      await session.updatePending();
+      if (mounted) message(context, result is Map && result['queued']==true ? 'حُفظ طلب إضافة العامل؛ لن يستطيع الدخول قبل المزامنة' : 'تمت إضافة العامل بنجاح');
     } catch (e) { if (mounted) message(context, '$e'); }
     finally { if (mounted) setState(() => saving = false); }
   }
@@ -1164,10 +1169,11 @@ class _WorkersScreenState extends State<WorkersScreen> {
       );
       if (updatedName == null || !mounted) return;
       setState(() => saving = true);
-      await Scope.of(context).api.request('PUT', '/api/workers/$id/name',
-          body: {'name': updatedName});
+      final session = Scope.of(context);
+      final result = await session.api.renameWorker(id, initialName, updatedName);
+      await session.updatePending();
       await load();
-      if (mounted) message(context, 'تم تحديث اسم العامل');
+      if (mounted) message(context, result['queued'] == true ? 'حُفظ الاسم محلياً بانتظار المزامنة' : 'تم تحديث اسم العامل');
     } catch (e) {
       if (mounted) message(context, '$e');
     } finally {
@@ -1264,6 +1270,7 @@ class _WorkersScreenState extends State<WorkersScreen> {
                         style: appText(13, weight: FontWeight.w800)),
                     Text('${entry['phoneNumber']}',
                         style: appText(11, color: secondaryText)),
+                    if (entry['offlineCreate']==true) const Text('بانتظار إنشاء الحساب على الخادم'),
                   ],
                 )),
               ]),
@@ -1273,13 +1280,13 @@ class _WorkersScreenState extends State<WorkersScreen> {
                 spacing: 4,
                 children: [
                   TextButton.icon(
-                    onPressed: saving ? null : () => renameWorker(
+                    onPressed: saving || entry['offlineCreate']==true ? null : () => renameWorker(
                         Map<String, dynamic>.from(entry as Map)),
                     icon: const Icon(Icons.edit_outlined, size: 17),
                     label: const Text('تعديل الاسم'),
                   ),
                   TextButton.icon(
-                    onPressed: saving ? null : () => deleteWorker(
+                    onPressed: saving || entry['offlineCreate']==true ? null : () => deleteWorker(
                         Map<String, dynamic>.from(entry as Map)),
                     icon: const Icon(Icons.delete_outline, size: 17),
                     label: const Text('حذف'),

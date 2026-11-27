@@ -96,16 +96,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
               if (!await ReportExportGuard.confirmServerOnly(context, session)) return;
               if (!mounted) return;
               try {
-                // Refresh before printing, rather than trusting an older snapshot.
+                final local = session.isOffline;
                 final data = await load();
                 if (!mounted) return;
-                if (session.isOffline) {
-                  message(context, 'انقطع الاتصال بالخادم. لم تتم الطباعة حتى لا نصدر بيانات ناقصة.');
+                if (!local && session.isOffline) {
+                  message(context, 'انقطع الاتصال بالخادم. أعد المحاولة لتصدير نسخة محلية.');
                   return;
                 }
                 await Exports.report(
                   session.shopName, data, range,
-                  pendingLocal: session.pendingFinancialSync,
+                  pendingLocal: session.pendingFinancialSync, offlineCopy:local,
                   collectionAccounts: collectionAccountsFromSettings(session.settings),
                 );
               } catch (e) {
@@ -191,7 +191,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                     Text(
                       session.isOffline
-                          ? 'اتصل بالخادم لتحديث التقرير وإجراء طباعة دقيقة.'
+                          ? 'يمكن تصدير نسخة محلية غير مكتملة؛ اتصل بالخادم للحصول على تقرير معتمد.'
                           : 'يمكنك طباعة بيانات الخادم المتزامنة فقط؛ الحركات الموجودة على الجهاز بانتظار المزامنة لن تُدرج في التقرير.',
                     ),
                   ],
@@ -442,7 +442,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           page++;
           total = data['total'];
           overview = data['overview'] == null
-              ? null
+              ? historyTotals(rows, supplier:partyKind=='Supplier')
               : Map<String, dynamic>.from(data['overview']);
         });
       }
@@ -484,6 +484,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (!await ReportExportGuard.confirmServerOnly(context, session)) return;
     if (!mounted || printing || busy || error != null) return;
     final pendingLocal = session.pendingFinancialSync;
+    final local = session.isOffline;
     final params = query;
     final exportParty = selectedParty;
     final selectedRange = range;
@@ -507,7 +508,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 query: {...params, 'page': p++, 'size': 100},
               )
             : await accountHistory(exportParty, params);
-        if (session.isOffline) {
+        if (!local && session.isOffline) {
           throw StateError('انقطع الاتصال بالخادم أثناء تجهيز التقرير. أعد المحاولة عند عودة الاتصال.');
         }
         fetched += (response['items'] as List).length;
@@ -528,19 +529,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
         if (printNames.containsKey(id)) continue;
         try {
           final party = await session.api.get('/api/parties/$id');
-          if (session.isOffline) {
+          if (!local && session.isOffline) {
             throw StateError('انقطع الاتصال بالخادم قبل إكمال أسماء الحسابات.');
           }
           printNames[id] = '${party['name']}';
         } on ApiFailure catch (e) {
-          if (session.isOffline || e.status != 404) rethrow;
+          if (!local && (session.isOffline || e.status != 404)) rethrow;
           printNames[id] = 'حساب سابق';
         }
       }
       if (!mounted) return;
       if (csv) {
         await Exports.historyCsv(
-          context, entries, printNames, pendingLocal: pendingLocal,
+          context, entries, printNames, pendingLocal: pendingLocal, offlineCopy:local,
           customerReport: partyKind == 'Customer',
           collectionAccounts: collectionAccountsFromSettings(session.settings),
         );
@@ -552,7 +553,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           selectedRange,
           selectedKind,
           selectionLabel: selectedLabel,
-          pendingLocal: pendingLocal,
+          pendingLocal: pendingLocal, offlineCopy:local,
           customerReport: partyKind == 'Customer',
           collectionAccounts: collectionAccountsFromSettings(session.settings),
         );
@@ -568,6 +569,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final session = Scope.of(context);
     if (!await ReportExportGuard.confirmServerOnly(context, session)) return;
     if (!mounted || printing || busy || error != null || overview == null) return;
+    final local = session.isOffline;
     setState(() => printing = true);
     try {
       // The report list deliberately includes voided entries for audit, so
@@ -576,7 +578,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       Json shareOverview;
       if (selectedParty != null) {
         final response = await accountHistory(selectedParty!, query);
-        shareOverview = Map<String, dynamic>.from(response['overview'] as Map);
+        shareOverview = historyTotals((response['items'] as List).whereType<Map>().where((e)=>e['offlinePending']!=true).map((e)=>Map<String,dynamic>.from(e)).toList(),supplier:partyKind=='Supplier');
       } else {
         final entries = <Json>[];
         var pageNumber = 1;
@@ -597,7 +599,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               .toList();
           fetched += pageEntries.length;
           totalEntries = (response['total'] as num? ?? fetched).toInt();
-          entries.addAll(pageEntries.where((e) => e['voidedAt'] == null));
+          entries.addAll(pageEntries.where((e) => e['voidedAt'] == null && e['offlinePending'] != true));
           if (fetched >= totalEntries || pageEntries.isEmpty) break;
         }
         shareOverview = historyTotals(
@@ -605,7 +607,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           supplier: partyKind == 'Supplier',
         );
       }
-      if (session.isOffline) {
+      if (!local && session.isOffline) {
         message(context, 'انقطع الاتصال. أعد المحاولة قبل مشاركة الملخص.');
         return;
       }
@@ -613,7 +615,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
       // party balance is always fetched fresh and describes today's balance.
       num? currentBalance;
       num? groupOutstanding;
-      if (selectedParty != null) {
+      if (local || session.pendingFinancialSync>0) {
+        // Cached/projected current balances are not authoritative.
+      } else if (selectedParty != null) {
         final card = await session.api.get('/api/parties/${selectedParty!['id']}');
         currentBalance = card['balance'] as num?;
         if (currentBalance == null) {
@@ -627,7 +631,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         groupOutstanding = accounts['outstanding'] as num?;
       }
       if (!mounted) return;
-      if (session.isOffline) {
+      if (!local && session.isOffline) {
         message(context, 'انقطع الاتصال. أعد المحاولة قبل مشاركة الملخص.');
         return;
       }
@@ -644,7 +648,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         pendingLocal: session.pendingFinancialSync,
         collectionAccounts: collectionAccountsFromSettings(session.settings),
       );
-      await Receipts.draft(context, draft, '');
+      await Receipts.draft(context, local ? 'نسخة محلية غير مكتملة — قد تكون البيانات قديمة\n$draft' : draft, '');
     } catch (e) {
       if (mounted) message(context, e);
     } finally {
@@ -979,7 +983,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 color: paleOrange,
                 child: Text(
                   session.isOffline
-                      ? 'لا يمكن تجهيز تصدير كامل دون اتصال بالخادم. اتصل بالإنترنت ثم أعد تحميل التقرير.'
+                      ? 'التصدير المحلي قد يكون ناقصاً؛ اتصل بالخادم للحصول على نسخة معتمدة.'
                       : ReportExportGuard.pendingNotice(session.pendingFinancialSync),
                 ),
               ),

@@ -126,6 +126,7 @@ Future<Session> fakeSession({
       case '/api/subscription':
         return response({
           'id': 'shop-1',
+          'userId': 'owner-1', 'isOwner': true,
           'name': 'محل الأمانة',
           'active': active,
           'suspended': false,

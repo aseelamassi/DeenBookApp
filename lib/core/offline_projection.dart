@@ -46,11 +46,10 @@ class OfflineProjection {
     if (query == null) return true;
     final timestamp = DateTime.tryParse('${entry['occurredAt'] ?? ''}');
     if (timestamp == null) return true;
-    final local = timestamp.toLocal();
     final from = DateTime.tryParse('${query['from'] ?? ''}');
     final to = DateTime.tryParse('${query['to'] ?? ''}');
-    if (from != null && local.isBefore(DateTime(from.year, from.month, from.day))) return false;
-    if (to != null && !local.isBefore(DateTime(to.year, to.month, to.day + 1))) return false;
+    if (from != null && timestamp.isBefore(from)) return false;
+    if (to != null && !timestamp.isBefore(to)) return false;
     return true;
   }
 

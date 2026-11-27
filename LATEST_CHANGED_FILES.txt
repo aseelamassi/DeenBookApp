@@ -1,0 +1,15 @@
+README_Worker_Delete_Fix.txt
+README_Offline_7Day.txt
+test/offline_catalog_test.dart
+lib/services/export.dart
+lib/services/receipts.dart
+lib/services/report_export_guard.dart
+lib/ui/widgets.dart
+lib/features/profile.dart
+lib/features/catalog.dart
+lib/features/reports.dart
+lib/core/offline.dart
+lib/core/api.dart
+lib/core/offline_catalog.dart
+lib/core/session.dart
+lib/core/offline_projection.dart

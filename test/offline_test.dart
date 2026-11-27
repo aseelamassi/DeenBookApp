@@ -50,6 +50,7 @@ void main() {
         if (r.path == '/api/subscription') {
           return response({
             'id': 'shop-a',
+            'userId': 'owner-a', 'isOwner': true,
             'name': 'محل التجربة',
             'active': true,
             'suspended': false,
@@ -74,8 +75,7 @@ void main() {
       });
       final api = Api(store, client: dio);
       await api.login('0599000001', 'test');
-      final status = await api.get('/api/subscription');
-      await api.rememberStatus(status);
+      await api.get('/api/subscription');
       expect((await api.get('/api/dashboard'))['summary']['receivables'], 20);
 
       internet = false;
@@ -110,6 +110,7 @@ void main() {
         if (r.path == '/api/subscription') {
           return response({
             'id': 'shop-a',
+            'userId': 'owner-a', 'isOwner': true,
             'name': 'محل',
             'active': true,
             'suspended': false,
@@ -123,7 +124,7 @@ void main() {
       });
       final online = Api(store, client: dio);
       await online.login('0599000001', 'password');
-      await online.rememberStatus(await online.get('/api/subscription'));
+      await online.get('/api/subscription');
       final offlineDio = Dio(BaseOptions(baseUrl: 'https://test.invalid'));
       offlineDio.httpClientAdapter = Adapter(
         (r) => throw DioException(

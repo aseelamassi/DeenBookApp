@@ -24,7 +24,7 @@ void main() {
       }
       if (r.path == '/api/subscription') {
         return response({
-          'id': 'shop-1', 'name': 'محل', 'active': true,
+          'id': 'shop-1', 'userId': 'owner-1', 'isOwner': true, 'name': 'محل', 'active': true,
           'paidUntil': DateTime.now().toUtc().add(const Duration(days: 10)).toIso8601String(),
         });
       }
@@ -40,7 +40,7 @@ void main() {
 
     final api = Api(memory, client: dio);
     await api.login('0599000001', 'password');
-    await api.rememberStatus(await api.get('/api/subscription'));
+    await api.get('/api/subscription');
     await api.get('/api/customers', query: {
       'search': '', 'sort': 'balance', 'page': 1, 'size': 30,
     });

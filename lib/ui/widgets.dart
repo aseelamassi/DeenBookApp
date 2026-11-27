@@ -284,7 +284,7 @@ Widget metric(String label, dynamic value, {Color color = navy}) => Column(
   children: [
     Text(label, style: const TextStyle(color: muted, fontSize: 12)),
     const SizedBox(height: 6),
-    FittedBox(child: amount(value, color: color)),
+    if (value == null) const Text('غير متاح محلياً') else FittedBox(child: amount(value, color: color)),
   ],
 );
 Widget partyTile(Json p, VoidCallback onTap) => Card(
@@ -413,6 +413,7 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
   final pending = e['pendingConfirmation'] == true;
   final offlinePending = e['offlinePending'] == true;
   final voided = e['voidedAt'] != null;
+  final actionPending = e['offlineLedgerAction'] != null;
   final value = ((e['amount'] as num?) ?? 0) - ((e['discount'] as num?) ?? 0);
   final negative = ['Payment', 'Return'].contains(e['kind']);
   // A Purchase is a supplier invoice even in the global movements list.
@@ -589,7 +590,8 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
               style: const TextStyle(fontSize: 12, color: Color(0xFF8B5800)),
             ),
           ),
-        if (onVoid != null && !offlinePending && !voided) ...[
+        if (actionPending) Text(e['offlineActionError'] != null ? 'طلب الحركة يحتاج مراجعة في مركز المزامنة' : 'طلب ${e['offlineLedgerAction']=='void'?'الشطب':'التأكيد'} محفوظ بانتظار اعتماد الخادم', style: const TextStyle(color: Color(0xFF8B5800))),
+        if (onVoid != null && !offlinePending && !voided && !actionPending) ...[
           Align(
             alignment: AlignmentDirectional.centerStart,
             child: TextButton.icon(
@@ -605,7 +607,7 @@ Widget entryTile(Json e, {String? name, bool supplier = false, VoidCallback? onC
             'بانتظار وصول الحوالة — لم تُحتسب دفعة',
             style: TextStyle(color: Color(0xFF8B5800), fontSize: 12),
           ),
-          if (onConfirm != null)
+          if (onConfirm != null && !actionPending && !offlinePending)
             Align(
               alignment: AlignmentDirectional.centerStart,
               child: OutlinedButton.icon(

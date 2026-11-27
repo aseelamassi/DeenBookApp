@@ -23,8 +23,10 @@ class _SyncCenterScreenState extends State<SyncCenterScreen> {
     final session = Scope.of(context);
     final api = session.api;
     return [
-      ...await api.offlineVault.readOutbox(api.savedShopId),
+      ...await api.currentOutbox(),
       ...await api.pendingWorkerDeletes(),
+      ...await api.pendingWorkerRenames(),
+      ...await api.pendingCatalog(),
     ];
   }
 
@@ -84,6 +86,12 @@ class _SyncCenterScreenState extends State<SyncCenterScreen> {
             const Text(
               'تظهر الحركات المالية المعلقة في السجل المحلي فقط حتى تأكيد الخادم. طلبات حذف العاملين لا تصبح نافذة على الأجهزة الأخرى إلا بعد المزامنة.',
             ),
+            FutureBuilder<int>(
+              future: session.api.legacyPendingCount(),
+              builder: (context, snapshot) => (snapshot.data ?? 0) > 0
+                  ? Text('توجد ${snapshot.data} حركة من إصدار قديم بلا هوية مؤكدة. محفوظة دون إرسال؛ تواصل مع الدعم لمراجعتها.', style: const TextStyle(color: Colors.red))
+                  : const SizedBox.shrink(),
+            ),
             const SizedBox(height: 16),
             BusyButton(
               label: session.syncing ? 'تجري المزامنة' : 'مزامنة الآن',
@@ -115,7 +123,34 @@ class _SyncCenterScreenState extends State<SyncCenterScreen> {
                 return Column(
                   children: [
                     for (final record in records)
-                      if (record['kind'] == 'WorkerDelete')
+                      if (record['kind'] == 'CatalogMutation')
+                        Surface(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          Text('بيانات المحل: ${record['method']} — ${record['collection']}'),
+                          Text('${(record['body'] as Map)['name'] ?? record['entityId']}'),
+                          Text('تاريخ التسجيل: ${day(record['savedAt'])}'),
+                          Text(record['lastError'] == null ? 'بانتظار المزامنة' : 'تحتاج مراجعة: ${record['lastError']}'),
+                          if (record['lastError'] != null) ...[
+                            const Text('العملية محفوظة؛ لم تُعتمد على الخادم. لا تحذف التطبيق.'),
+                            TextButton(onPressed:session.syncing ? null : () async {
+                              final sure = await confirm(context,'إلغاء الطلب المرفوض','لن يتم إرسال هذا التعديل المحلي. هل تريد الإلغاء؟');
+                              if (!sure || !context.mounted) return;
+                              try { await session.api.discardRejectedCatalog('${record['operationId']}'); await session.updatePending(); }
+                              catch(e) { if(context.mounted) message(context,e); }
+                            },child:const Text('إلغاء الطلب المرفوض')),
+                          ],
+                        ]))
+                      else if (record['kind'] == 'WorkerRename')
+                        Surface(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                          Text('تعديل اسم عامل: ${record['workerName'] ?? ''}'),
+                          Text(record['lastError'] == null ? 'بانتظار المزامنة' : '${record['lastError']}'),
+                          if (record['lastError'] != null) TextButton(onPressed: session.syncing ? null : () async {
+                            final sure = await confirm(context, 'إلغاء التعديل المحلي', 'سيبقى اسم العامل الموجود على الخادم. هل تريد الإلغاء؟');
+                            if (!sure || !context.mounted) return;
+                            try { await session.api.discardWorkerRename('${record['workerId']}'); await session.updatePending(); }
+                            catch (e) { if (context.mounted) message(context, '$e'); }
+                          }, child: const Text('إلغاء التعديل المحلي')),
+                        ]))
+                      else if (record['kind'] == 'WorkerDelete')
                         Surface(child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [

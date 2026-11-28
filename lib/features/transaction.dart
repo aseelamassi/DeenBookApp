@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:speech_to_text/speech_to_text.dart';
 import 'package:uuid/uuid.dart';
 
 import '../core/api.dart';
@@ -21,6 +20,7 @@ import '../ui/widgets.dart';
 import '../ui/party_lookup_field.dart';
 import 'catalog.dart';
 import 'reports.dart';
+import 'voice_assistant.dart';
 
 Future<void> quickAction(BuildContext context) async {
   final result = await showModalBottomSheet<String>(
@@ -259,14 +259,16 @@ class _TransactionScreenState extends State<TransactionScreen> {
     total.text = decimalMoney(lines.fold(0, (sum, p) => sum + p.total));
     _refreshSupplierInvoiceNote();
   });
-  final speech = SpeechToText();
+  String? voiceReview;
+  bool voiceNeedsReview = false;
+  bool voiceOpen = false;
+  int voiceRevision = 0;
   Json? party, pending;
   late String kind;
   String method = 'Cash';
   bool supplier = false,
       busy = false,
       restoring = true,
-      listening = false,
       hadUncertain = false;
   String? error;
   DateTime when = DateTime.now();
@@ -370,13 +372,19 @@ class _TransactionScreenState extends State<TransactionScreen> {
         lines.add(InvoiceLine.product(widget.initialProduct!, supplier));
         itemsChanged();
       }
-      if (mounted) setState(() => restoring = false);
+      if (mounted) {
+        setState(() => restoring = false);
+        if (widget.voice && pending == null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) dictate();
+          });
+        }
+      }
     }
   }
 
   @override
   void dispose() {
-    speech.cancel();
     for (final c in [
       total,
       paid,
@@ -393,48 +401,67 @@ class _TransactionScreenState extends State<TransactionScreen> {
   }
 
   Future<void> dictate() async {
-    if (listening) {
-      await speech.stop();
-      if (mounted) setState(() => listening = false);
-      return;
-    }
+    if (busy || restoring || pending != null || voiceOpen) return;
+    final session = Scope.of(context);
+    final shop = session.api.savedShopId;
+    final user = session.api.verifiedUserId;
+    final global = widget.voice && widget.party == null;
+    final hadInput = (party != null && widget.party == null) || method != 'Cash' || waiting || total.text.trim().isNotEmpty || paid.text.trim().isNotEmpty ||
+        note.text.trim().isNotEmpty || lines.isNotEmpty || invoice.text.trim().isNotEmpty ||
+        invoicePhotoBase64 != null || (cents(discount.text) ?? 0) > 0 ||
+        handed.text.trim().isNotEmpty || reference.text.trim().isNotEmpty;
+    setState(() => voiceOpen = true);
     try {
-      final available = await speech.initialize(
-        onStatus: (s) {
-          if (mounted) setState(() => listening = s == 'listening');
-        },
-        onError: (_) {
-          if (mounted) {
-            setState(() => listening = false);
-            message(context, 'تعذّر التعرف على الصوت. يمكنك كتابة الوصف.');
-          }
-        },
+      final result = await showVoiceAssistant(context,
+        fixedParty: widget.party,
+        fixedKind: global ? null : kind,
+        fixedSupplier: global ? null : supplier,
       );
-      if (!available) {
-        if (mounted) {
-          message(
-            context,
-            'اسمح بالوصول إلى الميكروفون والتعرف على الكلام من إعدادات الجهاز.',
-          );
-        }
+      if (!mounted || result == null || pending != null) return;
+      if (shop != session.api.savedShopId || user != session.api.verifiedUserId) {
+        message(context, 'تغيّر الحساب. افتح شاشة الحركة من جديد.');
         return;
       }
-      final locales = await speech.locales();
-      final arabic = locales
-          .where((l) => l.localeId.startsWith('ar'))
-          .firstOrNull;
-      await speech.listen(
-        onResult: (r) {
-          if (mounted) setState(() => note.text = r.recognizedWords);
-        },
-        listenOptions: SpeechListenOptions(
-          localeId: arabic?.localeId,
-          listenMode: ListenMode.dictation,
-          partialResults: true,
-        ),
-      );
-    } catch (_) {
-      if (mounted) message(context, 'الإدخال الصوتي غير متاح على هذا الجهاز.');
+      if (hadInput) {
+        final replace = await showDialog<bool>(context: context, builder: (c) =>
+          AlertDialog(title: const Text('استبدال بيانات الحركة؟'),
+            content: const Text('سيتم استبدال البيانات الحالية غير المحفوظة بنتيجة الأمر الصوتي.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('إلغاء')),
+              FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('استبدال')),
+            ]));
+        if (!mounted || replace != true) return;
+      }
+      setState(() {
+        kind = result.kind;
+        supplier = result.supplier;
+        party = result.party;
+        lines..clear()..addAll(result.lines);
+        supplierPackCounts.clear();
+        itemMode = modern && isInvoice && lines.isNotEmpty;
+        _supplierNoteEdited = true;
+        invoice.clear();
+        invoicePhotoBase64 = null;
+        invoicePhotoContentType = null;
+        total.text = result.totalCents == null ? '' : decimalMoney(result.totalCents!);
+        paid.text = result.paidCents == null ? '' : decimalMoney(result.paidCents!);
+        discount.text = '0';
+        handed.clear();
+        reference.clear();
+        method = result.method;
+        waiting = result.waiting;
+        keepChange = false;
+        counterparty.text = kind == 'Payment' || supplier ? '' : '${party?['name'] ?? ''}';
+        // Preserve the original words if a product or quantity could not be extracted.
+        note.text = result.transcript;
+        voiceRevision++;
+        voiceNeedsReview = result.warnings.isNotEmpty;
+        voiceReview = result.warnings.isEmpty
+            ? 'تمت تعبئة الحركة من الصوت. راجع الحساب والأصناف والمبالغ قبل الحفظ.'
+            : 'راجع البيانات قبل الحفظ:\n${result.warnings.join('\n')}';
+      });
+    } finally {
+      if (mounted) setState(() => voiceOpen = false);
     }
   }
 
@@ -478,6 +505,25 @@ class _TransactionScreenState extends State<TransactionScreen> {
       }
       if (party == null) {
         message(context, 'اختر ${supplier ? 'المورد' : 'الزبون'} أولاً.');
+        return;
+      }
+    }
+    if (pending == null && voiceNeedsReview) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('تأكيد البيانات بعد المراجعة'),
+          content: const Text('كان في الأمر الصوتي بيانات غير واضحة. هل راجعت الحساب وجميع الأصناف والمبالغ ووسيلة الدفع؟'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('الرجوع للمراجعة')),
+            FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('نعم، احفظ الحركة')),
+          ],
+        ),
+      );
+      if (!mounted || confirmed != true || busy || pending != null) return;
+      final api = Scope.of(context).api;
+      if (draft.shopId != api.savedShopId || draft.userId != api.verifiedUserId) {
+        message(context, 'تغيّر الحساب. افتح شاشة الحركة من جديد.');
         return;
       }
     }
@@ -609,7 +655,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
       );
     }
     return PartyLookupField(
-      key: ValueKey('party-search-$supplier'),
+      key: ValueKey(voiceRevision == 0 ? 'party-search-$supplier' : 'party-search-$supplier-$voiceRevision'),
       label: supplier ? 'المورد' : 'الزبون',
       selected: party,
       enabled: !busy,
@@ -670,21 +716,21 @@ class _TransactionScreenState extends State<TransactionScreen> {
           ),
         ],
       ),
-      actions: (isCustomerDebt || kind == 'Payment')
+      actions: (isInvoice || kind == 'Payment' || kind == 'Return')
           ? [
               IconButton(
                 key: Key(kind == 'Payment'
                     ? (supplier
                         ? 'supplier-payment-description-microphone'
                         : 'payment-description-microphone')
-                    : 'debt-description-microphone'),
-                tooltip: listening ? 'إيقاف الإملاء الصوتي' : 'إملاء وصف الحركة',
-                onPressed: busy || pending != null || restoring
+                    : supplier ? 'supplier-invoice-voice-microphone' : kind == 'Return' ? 'return-voice-microphone' : 'debt-description-microphone'),
+                tooltip: 'المساعد الصوتي لتعبئة الحركة',
+                onPressed: busy || pending != null || restoring || voiceOpen
                     ? null
                     : dictate,
                 icon: Icon(
-                  listening ? Icons.stop_circle_outlined : Icons.mic_none,
-                  color: listening ? orange : navy,
+                  Icons.mic_none,
+                  color: navy,
                 ),
               ),
             ]
@@ -772,6 +818,21 @@ class _TransactionScreenState extends State<TransactionScreen> {
                               child: const Text('حذف المسودة بعد التحقق'),
                             ),
                           ],
+                        ),
+                      ],
+                    ),
+                  ),
+                if (voiceReview != null)
+                  Surface(
+                    color: paleOrange,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(voiceReview!, style: appText(12, weight: FontWeight.w700)),
+                        TextButton.icon(
+                          onPressed: busy || pending != null || voiceOpen ? null : dictate,
+                          icon: const Icon(Icons.mic_none),
+                          label: const Text('إعادة التحليل الصوتي'),
                         ),
                       ],
                     ),
@@ -865,6 +926,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                               if (itemMode)
                                 supplier && isInvoice
                                     ? SupplierInvoiceItems(
+                                        key: ValueKey('supplier-voice-$voiceRevision'),
                                         lines: lines,
                                         onChanged: itemsChanged,
                                         packCounts: supplierPackCounts,
@@ -874,6 +936,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                         },
                                       )
                                     : InvoiceItems(
+                                        key: ValueKey('customer-voice-$voiceRevision'),
                                         lines: lines,
                                         purchase: supplier,
                                         onChanged: itemsChanged,
@@ -947,6 +1010,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                             if (isInvoice && !supplier)
                               Surface(
                                 child: ExpansionTile(
+                                  key: ValueKey('customer-paid-voice-$voiceRevision'),
                                   initiallyExpanded: (cents(paid.text) ?? 0) > 0,
                                   maintainState: true,
                                   tilePadding: const EdgeInsets.symmetric(
@@ -1472,15 +1536,13 @@ class _TransactionScreenState extends State<TransactionScreen> {
                                     ),
                                     if (pending == null)
                                       OutlinedButton.icon(
-                                        onPressed: busy ? null : dictate,
+                                        onPressed: busy || voiceOpen ? null : dictate,
                                         icon: Icon(
-                                          listening ? Icons.stop : Icons.mic_none,
+                                          Icons.mic_none,
                                           size: 20,
                                         ),
                                         label: Text(
-                                          listening
-                                              ? 'إيقاف التسجيل'
-                                              : 'إملاء وصف الحركة',
+                                          'المساعد الصوتي لتعبئة الحركة',
                                         ),
                                       ),
                                   ],

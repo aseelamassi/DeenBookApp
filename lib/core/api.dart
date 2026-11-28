@@ -102,6 +102,11 @@ String validateBaseUrl(String raw, {bool release = kReleaseMode}) {
 
 Json _responseObject(dynamic data) {
   if (data is Map<String, dynamic>) return data;
+  // Local projections can rebuild a JSON object as Map<dynamic, dynamic>.
+  // Accept string-keyed objects without accepting arrays, HTML or null.
+  if (data is Map && data.keys.every((key) => key is String)) {
+    return Map<String, dynamic>.from(data);
+  }
   throw ApiFailure(
     'استجابة الخادم غير صالحة. تواصل مع الإدارة للتحقق من الخدمة.',
   );
@@ -525,11 +530,21 @@ class Api {
       final key = path == '/api/transactions' ? 'items' : 'entries';
       final actions = {for(final r in catalog.where((r)=>r['collection']=='/api/transactions')) '${r['entityId']}':r};
       if (raw[key] is List) {
-        raw = {...raw, key:(raw[key] as List).map((e) {
-          if(e is! Map || !actions.containsKey('${e['id']}')) return e;
-          final action = actions['${e['id']}']!;
-          return {...e,'offlineLedgerAction':'${action['path']}'.endsWith('/void')?'void':'confirm','offlineActionError':action['lastError']};
-        }).toList()};
+        // Keep the JSON map type even when the pending action queue is empty.
+        raw = <String, dynamic>{
+          ...Map<String, dynamic>.from(raw),
+          key: (raw[key] as List).map((e) {
+            if (e is! Map || !actions.containsKey('${e['id']}')) return e;
+            final action = actions['${e['id']}']!;
+            return <String, dynamic>{
+              ...Map<String, dynamic>.from(e),
+              'offlineLedgerAction': '${action['path']}'.endsWith('/void')
+                  ? 'void'
+                  : 'confirm',
+              'offlineActionError': action['lastError'],
+            };
+          }).toList(),
+        };
       }
     }
     if (path == '/api/settings') {
